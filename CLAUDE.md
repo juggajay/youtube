@@ -105,6 +105,278 @@ web_publisher.py    --> publish_manifest.json
 publisher.py        --> publish_result.json
 ```
 
+---
+
+## Data Ingestion & Priority Matrix (ingester.py)
+
+### CRITICAL: This section is the Source of Truth for vulnerability filtering.
+
+### The Priority Matrix (Hardcoded)
+
+**This logic is applied BEFORE the LLM sees any data.** The LLM only receives pre-filtered, high-priority vulnerabilities. This prevents alert fatigue and ensures we only discuss actionable threats.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         PRIORITY MATRIX                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  IF cisa_kev == True                         →  CRITICAL (always)      │
+│                                                                         │
+│  ELSE IF cvss_score > 9.0 AND epss_score > 0.10  →  CRITICAL           │
+│                                                                         │
+│  ELSE IF cvss_score > 7.0 AND epss_score > 0.30  →  HIGH               │
+│                                                                         │
+│  ELSE                                        →  FILTERED OUT            │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Implementation: ingester.py
+
+```python
+"""
+ingester.py - Vulnerability ingestion with hardcoded Priority Matrix
+
+The Priority Matrix is applied BEFORE the LLM sees the data.
+Only CRITICAL and HIGH vulnerabilities pass through to the script generator.
+
+Filtered vulnerabilities are logged but not included in the episode.
+"""
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class Priority(Enum):
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    FILTERED = "FILTERED"
+
+
+@dataclass
+class Vulnerability:
+    cve_id: str
+    cvss_score: float
+    epss_score: float
+    cisa_kev: bool
+    vendor: str
+    product: str
+    description: str
+    remediation_url: str
+    # Set by apply_priority_matrix()
+    priority: Optional[Priority] = None
+
+
+def apply_priority_matrix(vuln: Vulnerability) -> Priority:
+    """
+    Apply the hardcoded Priority Matrix to a vulnerability.
+
+    This logic is IMMUTABLE and runs before any LLM processing.
+    The LLM never sees FILTERED vulnerabilities.
+
+    Rules (in order of precedence):
+        1. CISA KEV listed -> CRITICAL (always include, actively exploited)
+        2. CVSS > 9.0 AND EPSS > 0.10 -> CRITICAL (severe + likely exploited)
+        3. CVSS > 7.0 AND EPSS > 0.30 -> HIGH (high severity + high probability)
+        4. Everything else -> FILTERED (not included unless manual override)
+
+    Args:
+        vuln: Vulnerability object with scores populated
+
+    Returns:
+        Priority enum value
+    """
+
+    # Rule 1: CISA KEV is always CRITICAL (actively exploited in the wild)
+    if vuln.cisa_kev:
+        logger.info(f"{vuln.cve_id}: CRITICAL (CISA KEV listed)")
+        return Priority.CRITICAL
+
+    # Rule 2: Very high severity + reasonable exploit probability
+    if vuln.cvss_score > 9.0 and vuln.epss_score > 0.10:
+        logger.info(f"{vuln.cve_id}: CRITICAL (CVSS {vuln.cvss_score} + EPSS {vuln.epss_score})")
+        return Priority.CRITICAL
+
+    # Rule 3: High severity + high exploit probability
+    if vuln.cvss_score > 7.0 and vuln.epss_score > 0.30:
+        logger.info(f"{vuln.cve_id}: HIGH (CVSS {vuln.cvss_score} + EPSS {vuln.epss_score})")
+        return Priority.HIGH
+
+    # Rule 4: Everything else is filtered out
+    logger.debug(f"{vuln.cve_id}: FILTERED (CVSS {vuln.cvss_score}, EPSS {vuln.epss_score})")
+    return Priority.FILTERED
+
+
+def filter_vulnerabilities(vulns: list[Vulnerability]) -> tuple[list[Vulnerability], list[Vulnerability]]:
+    """
+    Apply Priority Matrix to all vulnerabilities.
+
+    Args:
+        vulns: List of all ingested vulnerabilities
+
+    Returns:
+        Tuple of (included, filtered) vulnerability lists
+    """
+    included = []
+    filtered = []
+
+    for vuln in vulns:
+        vuln.priority = apply_priority_matrix(vuln)
+
+        if vuln.priority in (Priority.CRITICAL, Priority.HIGH):
+            included.append(vuln)
+        else:
+            filtered.append(vuln)
+
+    # Sort by priority (CRITICAL first) then by CVSS score descending
+    included.sort(key=lambda v: (
+        0 if v.priority == Priority.CRITICAL else 1,
+        -v.cvss_score
+    ))
+
+    logger.info(f"Priority Matrix: {len(included)} included, {len(filtered)} filtered out")
+
+    return included, filtered
+
+
+def check_manual_override(cve_id: str, overrides: dict) -> Optional[Priority]:
+    """
+    Check if a CVE has a manual override from Airtable.
+
+    Allows editor to force-include a filtered vulnerability or
+    force-exclude a normally included one.
+
+    Args:
+        cve_id: The CVE identifier
+        overrides: Dict of {cve_id: priority_override} from Airtable
+
+    Returns:
+        Priority override if exists, None otherwise
+    """
+    if cve_id in overrides:
+        override = overrides[cve_id]
+        logger.info(f"{cve_id}: MANUAL OVERRIDE -> {override}")
+        return Priority(override)
+    return None
+```
+
+### Priority Matrix Rationale
+
+| Rule | Condition | Priority | Rationale |
+|------|-----------|----------|-----------|
+| 1 | `cisa_kev == True` | CRITICAL | Already being exploited in the wild. No debate. |
+| 2 | `cvss > 9.0 AND epss > 0.10` | CRITICAL | Severe vulnerability with meaningful exploit probability |
+| 3 | `cvss > 7.0 AND epss > 0.30` | HIGH | High severity with high likelihood of exploit |
+| 4 | Everything else | FILTERED | Doesn't meet threshold for daily briefing |
+
+### Why EPSS Matters
+
+CVSS alone causes alert fatigue. A CVSS 10.0 vulnerability that has 0.01% chance of exploitation is less urgent than a CVSS 7.5 with 50% exploit probability.
+
+| Scenario | CVSS | EPSS | Result | Why |
+|----------|------|------|--------|-----|
+| Critical + likely exploited | 9.8 | 0.47 | CRITICAL | High severity, high probability |
+| Critical but theoretical | 9.5 | 0.02 | FILTERED | Severe but unlikely to be exploited |
+| High + very likely | 7.5 | 0.45 | HIGH | Worth mentioning due to probability |
+| Medium severity | 6.5 | 0.80 | FILTERED | Not severe enough even if likely |
+| KEV listed | 7.0 | 0.15 | CRITICAL | CISA says it's being exploited NOW |
+
+### Manual Override Flow
+
+If an editor wants to include a filtered vulnerability (or exclude an included one):
+
+1. Editor checks `Include_In_Episode` in Airtable Vulnerabilities table
+2. `db_sync.py` pulls overrides before script generation
+3. `ingester.py` applies overrides after Priority Matrix
+4. Override is logged for audit trail
+
+```python
+# In the pipeline orchestrator
+overrides = db_sync.get_manual_overrides(episode_date)
+
+for vuln in vulns:
+    override = check_manual_override(vuln.cve_id, overrides)
+    if override:
+        vuln.priority = override
+```
+
+### Output: raw_vulnerabilities.json (before filtering)
+
+```json
+{
+  "date": "2025-01-15",
+  "ingested_at": "2025-01-15T06:00:00Z",
+  "source_stats": {
+    "nvd_count": 47,
+    "cisa_kev_count": 2,
+    "github_advisory_count": 12
+  },
+  "vulnerabilities": [
+    {
+      "cve_id": "CVE-2025-1234",
+      "cvss_score": 9.8,
+      "epss_score": 0.47,
+      "cisa_kev": false,
+      "priority": null,
+      "vendor": "Apache",
+      "product": "Tomcat"
+    }
+  ]
+}
+```
+
+### Output: daily_brief_packet.json (after filtering)
+
+```json
+{
+  "date": "2025-01-15",
+  "generated_at": "2025-01-15T06:05:00Z",
+  "filter_stats": {
+    "total_ingested": 61,
+    "critical_count": 3,
+    "high_count": 4,
+    "filtered_count": 54
+  },
+  "vulnerabilities": [
+    {
+      "cve_id": "CVE-2025-1234",
+      "cvss_score": 9.8,
+      "epss_score": 0.47,
+      "cisa_kev": false,
+      "priority": "CRITICAL",
+      "vendor": "Apache",
+      "product": "Tomcat",
+      "bluf": "If you run Tomcat 9.x, upgrade to 9.0.83 immediately."
+    }
+  ]
+}
+```
+
+### Logging for Nuke Analytics
+
+When episodes are nuked due to low-value content, we analyze the filtered vulnerabilities to tune the matrix:
+
+```python
+def log_filter_decision(vuln: Vulnerability, priority: Priority) -> None:
+    """Log every filter decision for later analysis."""
+    logger.info(
+        f"FILTER_DECISION | "
+        f"cve={vuln.cve_id} | "
+        f"cvss={vuln.cvss_score} | "
+        f"epss={vuln.epss_score} | "
+        f"kev={vuln.cisa_kev} | "
+        f"result={priority.value}"
+    )
+```
+
+This log can be analyzed to tune thresholds if too many episodes are getting nuked.
+
+---
+
 ### JSON Contract Examples
 
 #### daily_brief_packet.json
