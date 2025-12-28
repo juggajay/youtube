@@ -447,6 +447,339 @@ def write_audio_manifest(episode_date: str, audio_path: str, api_response: dict)
 
 ---
 
+## FFmpeg Video Assembly (video_assembler.py)
+
+### CRITICAL: This section is the Source of Truth for video generation.
+
+### Architecture: Complex Filtergraph
+
+**DO NOT use simple overlays.** Use a complex filtergraph with dynamic text rendering based on ElevenLabs timestamps.
+
+The video assembler reads `audio_manifest.json` and uses `line_timestamps[]` to determine when each speaker is active, then generates FFmpeg filters with `enable='between(t,start,end)'` to create dynamic speaker highlighting.
+
+### Speaker Name Highlighting
+
+When a speaker is active, their name glows. When inactive, it dims.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│     ╔═══════════╗              ┌───────────┐               │
+│     ║   ALEX    ║   <-- GLOW   │  MORGAN   │  <-- DIM      │
+│     ╚═══════════╝              └───────────┘               │
+│                                                             │
+│                    ┌─────────────────┐                      │
+│                    │   [WAVEFORM]    │                      │
+│                    └─────────────────┘                      │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  CVE-2025-1234 | Apache Tomcat RCE | CRITICAL       │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Implementation Requirements
+
+#### 1. Parse Timestamps from audio_manifest.json
+
+```python
+def load_speaker_segments(manifest_path: str) -> list[dict]:
+    """
+    Load line timestamps and convert to FFmpeg-compatible time ranges.
+
+    Returns list of segments with start/end in seconds (not ms).
+    """
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    segments = []
+    for line in manifest["line_timestamps"]:
+        segments.append({
+            "speaker": line["speaker"],
+            "start": line["start_ms"] / 1000.0,  # Convert to seconds
+            "end": line["end_ms"] / 1000.0
+        })
+
+    return segments
+```
+
+#### 2. Generate Dynamic drawtext Filters
+
+**Use `enable='between(t,start,end)'` for each speaker segment.**
+
+```python
+def generate_speaker_filters(segments: list[dict]) -> str:
+    """
+    Generate FFmpeg drawtext filters for dynamic speaker highlighting.
+
+    - Active speaker: Bright text with glow effect
+    - Inactive speaker: Dim text, no glow
+    """
+
+    # Collect time ranges for each speaker
+    alex_ranges = [s for s in segments if s["speaker"] == "Alex"]
+    morgan_ranges = [s for s in segments if s["speaker"] == "Morgan"]
+
+    filters = []
+
+    # --- ALEX NAME (Left side) ---
+
+    # Base dim state (always visible)
+    filters.append(
+        "drawtext=text='ALEX':"
+        "fontfile=/path/to/font.ttf:"
+        "fontsize=48:"
+        "fontcolor=0x666666:"  # Dim gray
+        "x=200:y=100"
+    )
+
+    # Glow layers when Alex is speaking (stacked for glow effect)
+    for seg in alex_ranges:
+        # Outer glow (blur simulation with larger, semi-transparent text)
+        filters.append(
+            f"drawtext=text='ALEX':"
+            f"fontfile=/path/to/font.ttf:"
+            f"fontsize=52:"
+            f"fontcolor=0x00FFFF@0.3:"  # Cyan glow, 30% opacity
+            f"x=198:y=98:"
+            f"enable='between(t,{seg['start']},{seg['end']})'"
+        )
+        # Bright text
+        filters.append(
+            f"drawtext=text='ALEX':"
+            f"fontfile=/path/to/font.ttf:"
+            f"fontsize=48:"
+            f"fontcolor=0x00FFFF:"  # Bright cyan
+            f"x=200:y=100:"
+            f"enable='between(t,{seg['start']},{seg['end']})'"
+        )
+
+    # --- MORGAN NAME (Right side) ---
+
+    # Base dim state
+    filters.append(
+        "drawtext=text='MORGAN':"
+        "fontfile=/path/to/font.ttf:"
+        "fontsize=48:"
+        "fontcolor=0x666666:"  # Dim gray
+        "x=1500:y=100"
+    )
+
+    # Glow layers when Morgan is speaking
+    for seg in morgan_ranges:
+        # Outer glow
+        filters.append(
+            f"drawtext=text='MORGAN':"
+            f"fontfile=/path/to/font.ttf:"
+            f"fontsize=52:"
+            f"fontcolor=0xFF6600@0.3:"  # Orange glow, 30% opacity
+            f"x=1498:y=98:"
+            f"enable='between(t,{seg['start']},{seg['end']})'"
+        )
+        # Bright text
+        filters.append(
+            f"drawtext=text='MORGAN':"
+            f"fontfile=/path/to/font.ttf:"
+            f"fontsize=48:"
+            f"fontcolor=0xFF6600:"  # Bright orange
+            f"x=1500:y=100:"
+            f"enable='between(t,{seg['start']},{seg['end']})'"
+        )
+
+    return ",".join(filters)
+```
+
+#### 3. Generate CVE Lower Third Filters
+
+Display CVE ID when that vulnerability is being discussed:
+
+```python
+def generate_cve_filters(segments: list[dict], script: dict) -> str:
+    """
+    Generate lower-third CVE display based on cve_refs in script.
+    """
+    filters = []
+
+    for i, seg in enumerate(segments):
+        # Find corresponding script line
+        script_line = script["dialogue"][i]
+        cve_refs = script_line.get("cve_refs", [])
+
+        if cve_refs:
+            cve_text = cve_refs[0]  # Primary CVE for this segment
+
+            # Background box
+            filters.append(
+                f"drawbox=x=100:y=980:w=1720:h=60:"
+                f"color=0x000000@0.7:t=fill:"
+                f"enable='between(t,{seg['start']},{seg['end']})'"
+            )
+
+            # CVE text
+            filters.append(
+                f"drawtext=text='{cve_text}':"
+                f"fontfile=/path/to/font.ttf:"
+                f"fontsize=36:"
+                f"fontcolor=0xFFFFFF:"
+                f"x=120:y=995:"
+                f"enable='between(t,{seg['start']},{seg['end']})'"
+            )
+
+    return ",".join(filters) if filters else ""
+```
+
+#### 4. Complete Filtergraph Assembly
+
+```python
+def build_filtergraph(
+    background: str,
+    audio_manifest: str,
+    script: str,
+    waveform: str
+) -> str:
+    """
+    Build complete FFmpeg filtergraph with all dynamic elements.
+
+    Filtergraph order:
+    1. Background image (scaled to 4K)
+    2. Waveform overlay (center)
+    3. Speaker names (with dynamic glow)
+    4. CVE lower thirds (timed to discussion)
+    5. Severity badge (static or timed)
+    """
+
+    segments = load_speaker_segments(audio_manifest)
+    script_data = json.load(open(script))
+
+    speaker_filters = generate_speaker_filters(segments)
+    cve_filters = generate_cve_filters(segments, script_data)
+
+    # Build the complete filtergraph
+    filtergraph = f"""
+    [0:v]scale=3840:2160[bg];
+    [1:v]scale=800:200[waveform];
+    [bg][waveform]overlay=x=1520:y=800[v1];
+    [v1]{speaker_filters}[v2];
+    [v2]{cve_filters}[v_final]
+    """
+
+    return filtergraph.replace("\n", "").replace("  ", "")
+```
+
+#### 5. FFmpeg Command Generation
+
+```python
+def generate_ffmpeg_command(
+    background: str,
+    waveform: str,
+    audio: str,
+    output: str,
+    filtergraph: str
+) -> str:
+    """
+    Generate complete FFmpeg command with complex filtergraph.
+
+    CRITICAL: Use explicit -map to preserve audio stream.
+    """
+
+    cmd = f"""
+    ffmpeg -y \\
+        -loop 1 -i {background} \\
+        -i {waveform} \\
+        -i {audio} \\
+        -filter_complex "{filtergraph}" \\
+        -map "[v_final]" \\
+        -map 2:a \\
+        -c:v libx264 -preset slow -crf 18 \\
+        -c:a aac -b:a 192k \\
+        -shortest \\
+        -pix_fmt yuv420p \\
+        {output}
+    """
+
+    return cmd.strip()
+```
+
+### Color Scheme
+
+| Element | Active Color | Inactive Color |
+|---------|--------------|----------------|
+| Alex name | `0x00FFFF` (Cyan) | `0x666666` (Gray) |
+| Morgan name | `0xFF6600` (Orange) | `0x666666` (Gray) |
+| Alex glow | `0x00FFFF@0.3` | - |
+| Morgan glow | `0xFF6600@0.3` | - |
+| CVE box bg | `0x000000@0.7` | - |
+| CVE text | `0xFFFFFF` | - |
+| CRITICAL badge | `0xFF0000` | - |
+| HIGH badge | `0xFFA500` | - |
+
+### Glow Effect Technique
+
+FFmpeg doesn't have native glow. Simulate with stacked text layers:
+
+```
+Layer 1: Larger text, offset -2px, 30% opacity (blur simulation)
+Layer 2: Larger text, offset +2px, 30% opacity (blur simulation)
+Layer 3: Normal text, full opacity (crisp center)
+```
+
+```python
+def glow_layers(text: str, x: int, y: int, color: str, start: float, end: float) -> list[str]:
+    """Generate 3-layer glow effect for text."""
+    return [
+        # Glow layer 1 (offset top-left)
+        f"drawtext=text='{text}':fontsize=52:fontcolor={color}@0.3:"
+        f"x={x-2}:y={y-2}:enable='between(t,{start},{end})'",
+
+        # Glow layer 2 (offset bottom-right)
+        f"drawtext=text='{text}':fontsize=52:fontcolor={color}@0.3:"
+        f"x={x+2}:y={y+2}:enable='between(t,{start},{end})'",
+
+        # Core text (crisp)
+        f"drawtext=text='{text}':fontsize=48:fontcolor={color}:"
+        f"x={x}:y={y}:enable='between(t,{start},{end})'",
+    ]
+```
+
+### Output: video_manifest.json
+
+```json
+{
+  "episode_date": "2025-01-15",
+  "video_file": "output/episodes/2025-01-15/episode_4K.mp4",
+  "resolution": "3840x2160",
+  "duration_seconds": 387,
+  "codec": "h264",
+  "crf": 18,
+  "dynamic_elements": {
+    "speaker_highlights": true,
+    "cve_lower_thirds": true,
+    "waveform": true
+  },
+  "speaker_segments": [
+    {"speaker": "Alex", "start": 0.0, "end": 8.5},
+    {"speaker": "Alex", "start": 8.5, "end": 24.0},
+    {"speaker": "Morgan", "start": 24.0, "end": 31.5}
+  ],
+  "sources": {
+    "audio_manifest": "audio_manifest.json",
+    "episode_script": "episode_script.json",
+    "background": "assets/background.png"
+  }
+}
+```
+
+### Performance Considerations
+
+| Issue | Solution |
+|-------|----------|
+| Many drawtext filters slow encoding | Batch similar enable ranges where possible |
+| Long episodes = huge filtergraph | Consider segmented encoding, concatenate after |
+| 4K is slow | Use `-preset fast` for drafts, `-preset slow` for final |
+| Font loading | Use fontconfig or absolute paths to avoid lookup delays |
+
+---
+
 ## Coding Standards
 
 ### General Principles
