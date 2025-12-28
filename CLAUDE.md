@@ -780,6 +780,511 @@ def glow_layers(text: str, x: int, y: int, color: str, start: float, end: float)
 
 ---
 
+## Airtable Review Dashboard (db_sync.py)
+
+### CRITICAL: This section is the Source of Truth for Airtable integration.
+
+### Overview
+
+We use **Airtable** as our Review Dashboard instead of a custom Streamlit app. The `db_sync.py` module handles all communication between the local pipeline and Airtable using the `pyairtable` library.
+
+```
+┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
+│  Local Pipeline │ ──────► │    Airtable     │ ──────► │  Local Pipeline │
+│                 │  PUSH   │                 │  PULL   │                 │
+│  - CVE Data     │         │  - Review UI    │         │  - Audio Engine │
+│  - Scripts      │         │  - Approval     │         │  - Video Engine │
+│  - Status       │         │  - Edits        │         │  - Publisher    │
+└─────────────────┘         └─────────────────┘         └─────────────────┘
+```
+
+### Airtable Base Structure
+
+#### Table: `Vulnerabilities`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `CVE_ID` | Single line text | Primary identifier (e.g., CVE-2025-1234) |
+| `Title` | Single line text | Short description |
+| `CVSS_Score` | Number | 0.0 - 10.0 |
+| `EPSS_Score` | Number | 0.0 - 1.0 (probability) |
+| `Severity` | Single select | CRITICAL, HIGH, MEDIUM, LOW |
+| `Exploit_Status` | Single select | none, poc_public, actively_exploited |
+| `KEV_Listed` | Checkbox | Is it in CISA KEV? |
+| `Vendor` | Single line text | e.g., Apache, Microsoft |
+| `Product` | Single line text | e.g., Tomcat, Exchange |
+| `Affected_Versions` | Single line text | e.g., 9.0.0 - 9.0.82 |
+| `Fixed_Version` | Single line text | e.g., 9.0.83 |
+| `Remediation_URL` | URL | Link to patch/advisory |
+| `BLUF` | Long text | Bottom Line Up Front |
+| `Description` | Long text | Full technical description |
+| `Episode_Date` | Date | Which episode this belongs to |
+| `Include_In_Episode` | Checkbox | Editor decision to include |
+| `Created_At` | Created time | Auto-populated |
+
+#### Table: `Episodes`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Episode_Date` | Date | Primary identifier |
+| `Status` | Single select | See status flow below |
+| `Script_JSON` | Long text | Full episode_script.json content |
+| `Vulnerabilities` | Link to Vulnerabilities | Related CVEs |
+| `Audio_URL` | URL | Link to generated MP3 (after audio engine) |
+| `Video_URL` | URL | Link to generated MP4 (after video engine) |
+| `Thumbnail_URL` | URL | Link to thumbnail |
+| `YouTube_URL` | URL | After publishing |
+| `Blog_URL` | URL | After publishing |
+| `Editor_Notes` | Long text | Human reviewer comments |
+| `Nuke_Reason` | Single select | If nuked: low_severity, duplicate, etc. |
+| `Created_At` | Created time | Auto-populated |
+| `Published_At` | Date time | When it went live |
+
+### Episode Status Flow
+
+```
+Draft ──► Script_Generated ──► Pending_Review ──► Approved ──► Rendering
+                                    │                              │
+                                    ▼                              ▼
+                                  Nuked                    Ready_for_Upload ──► Published
+```
+
+| Status | Meaning | Next Action |
+|--------|---------|-------------|
+| `Draft` | CVEs ingested, no script yet | Run generate_script.py |
+| `Script_Generated` | Script created, awaiting review | Human reviews in Airtable |
+| `Pending_Review` | In review queue | Human approves or nukes |
+| `Approved` | Ready for audio/video | db_sync.py triggers engines |
+| `Rendering` | Audio/video in progress | Wait for completion |
+| `Ready_for_Upload` | MP4 ready locally | Run publisher.py |
+| `Published` | Live on all platforms | Done |
+| `Nuked` | Skipped this episode | Log reason, no further action |
+
+### Implementation: db_sync.py
+
+```python
+"""
+db_sync.py - Airtable synchronization module
+
+Handles bidirectional sync between local pipeline and Airtable review dashboard.
+
+Dependencies:
+    pip install pyairtable
+
+Environment variables required:
+    AIRTABLE_API_KEY - Personal access token
+    AIRTABLE_BASE_ID - Base ID (starts with 'app')
+"""
+
+import os
+import json
+import logging
+from datetime import datetime
+from typing import Optional
+
+from pyairtable import Api, Table
+from pyairtable.formulas import match
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+AIRTABLE_API_KEY = os.environ["AIRTABLE_API_KEY"]
+AIRTABLE_BASE_ID = os.environ["AIRTABLE_BASE_ID"]
+
+# Table names
+VULNERABILITIES_TABLE = "Vulnerabilities"
+EPISODES_TABLE = "Episodes"
+
+# Initialize API
+api = Api(AIRTABLE_API_KEY)
+
+
+def get_table(table_name: str) -> Table:
+    """Get a table instance."""
+    return api.table(AIRTABLE_BASE_ID, table_name)
+
+
+# =============================================================================
+# PUSH: Local -> Airtable
+# =============================================================================
+
+def push_vulnerabilities(daily_brief_packet: dict) -> list[str]:
+    """
+    Push raw CVE data to the 'Vulnerabilities' table.
+
+    Called after filter_score.py generates daily_brief_packet.json.
+
+    Args:
+        daily_brief_packet: Parsed JSON from daily_brief_packet.json
+
+    Returns:
+        List of Airtable record IDs for the created vulnerabilities
+    """
+    table = get_table(VULNERABILITIES_TABLE)
+    episode_date = daily_brief_packet["date"]
+    record_ids = []
+
+    for vuln in daily_brief_packet["vulnerabilities"]:
+        # Check if CVE already exists for this episode date
+        existing = table.first(match({
+            "CVE_ID": vuln["cve_id"],
+            "Episode_Date": episode_date
+        }))
+
+        if existing:
+            logger.info(f"CVE {vuln['cve_id']} already exists for {episode_date}, skipping")
+            record_ids.append(existing["id"])
+            continue
+
+        # Map to Airtable fields
+        record = {
+            "CVE_ID": vuln["cve_id"],
+            "Title": vuln.get("title", ""),
+            "CVSS_Score": vuln["cvss_score"],
+            "EPSS_Score": vuln["epss_score"],
+            "Severity": vuln["severity"],
+            "Exploit_Status": vuln.get("exploit_status", "none"),
+            "KEV_Listed": vuln.get("kev_listed", False),
+            "Vendor": vuln.get("vendor", ""),
+            "Product": vuln.get("product", ""),
+            "Affected_Versions": vuln.get("affected_versions", ""),
+            "Fixed_Version": vuln.get("fixed_version", ""),
+            "Remediation_URL": vuln.get("remediation_url", ""),
+            "BLUF": vuln.get("bluf", ""),
+            "Description": vuln.get("description", ""),
+            "Episode_Date": episode_date,
+            "Include_In_Episode": True  # Default to include, editor can uncheck
+        }
+
+        created = table.create(record)
+        record_ids.append(created["id"])
+        logger.info(f"Pushed {vuln['cve_id']} to Airtable: {created['id']}")
+
+    return record_ids
+
+
+def push_episode_script(episode_date: str, script: dict, vuln_record_ids: list[str]) -> str:
+    """
+    Push generated script to Episodes table, link to vulnerabilities.
+
+    Called after generate_script.py creates episode_script.json.
+
+    Args:
+        episode_date: YYYY-MM-DD format
+        script: Parsed episode_script.json
+        vuln_record_ids: Airtable record IDs from push_vulnerabilities()
+
+    Returns:
+        Airtable record ID for the episode
+    """
+    table = get_table(EPISODES_TABLE)
+
+    # Check if episode already exists
+    existing = table.first(match({"Episode_Date": episode_date}))
+
+    record = {
+        "Episode_Date": episode_date,
+        "Status": "Script_Generated",
+        "Script_JSON": json.dumps(script, indent=2),
+        "Vulnerabilities": vuln_record_ids  # Link to vuln records
+    }
+
+    if existing:
+        # Update existing record
+        updated = table.update(existing["id"], record)
+        logger.info(f"Updated episode {episode_date}: {updated['id']}")
+        return updated["id"]
+    else:
+        # Create new record
+        created = table.create(record)
+        logger.info(f"Created episode {episode_date}: {created['id']}")
+        return created["id"]
+
+
+def update_episode_status(episode_date: str, status: str, **kwargs) -> None:
+    """
+    Update episode status and optional fields.
+
+    Args:
+        episode_date: YYYY-MM-DD format
+        status: New status value
+        **kwargs: Additional fields to update (Audio_URL, Video_URL, etc.)
+    """
+    table = get_table(EPISODES_TABLE)
+
+    episode = table.first(match({"Episode_Date": episode_date}))
+    if not episode:
+        raise ValueError(f"Episode not found: {episode_date}")
+
+    update_fields = {"Status": status, **kwargs}
+    table.update(episode["id"], update_fields)
+    logger.info(f"Updated episode {episode_date} status to {status}")
+
+
+def mark_ready_for_upload(episode_date: str, video_path: str, audio_path: str, thumbnail_path: str) -> None:
+    """
+    Mark episode as Ready_for_Upload after MP4 is rendered locally.
+
+    Called after video_assembler.py completes.
+
+    Args:
+        episode_date: YYYY-MM-DD format
+        video_path: Local path to MP4 file
+        audio_path: Local path to MP3 file
+        thumbnail_path: Local path to thumbnail
+    """
+    # In production, you'd upload these to cloud storage and use the URLs
+    # For now, we'll store local paths (or you can integrate with S3/GCS)
+
+    update_episode_status(
+        episode_date,
+        status="Ready_for_Upload",
+        Video_URL=f"file://{video_path}",  # Replace with cloud URL in production
+        Audio_URL=f"file://{audio_path}",
+        Thumbnail_URL=f"file://{thumbnail_path}"
+    )
+
+    logger.info(f"Episode {episode_date} marked Ready_for_Upload")
+
+
+# =============================================================================
+# PULL: Airtable -> Local
+# =============================================================================
+
+def pull_approved_episodes() -> list[dict]:
+    """
+    Pull all episodes with Status='Approved' to trigger Audio/Video engines.
+
+    Called by the scheduler or manually to check for approved work.
+
+    Returns:
+        List of episode records with parsed Script_JSON
+    """
+    table = get_table(EPISODES_TABLE)
+
+    approved = table.all(formula=match({"Status": "Approved"}))
+
+    episodes = []
+    for record in approved:
+        fields = record["fields"]
+
+        # Parse the script JSON
+        script_json = fields.get("Script_JSON", "{}")
+        try:
+            script = json.loads(script_json)
+        except json.JSONDecodeError:
+            logger.error(f"Invalid Script_JSON for episode {fields.get('Episode_Date')}")
+            continue
+
+        episodes.append({
+            "record_id": record["id"],
+            "episode_date": fields.get("Episode_Date"),
+            "script": script,
+            "editor_notes": fields.get("Editor_Notes", ""),
+            "vulnerabilities": fields.get("Vulnerabilities", [])
+        })
+
+    logger.info(f"Found {len(episodes)} approved episodes")
+    return episodes
+
+
+def pull_episode_script(episode_date: str) -> Optional[dict]:
+    """
+    Pull a specific episode's script by date.
+
+    Args:
+        episode_date: YYYY-MM-DD format
+
+    Returns:
+        Parsed script dict, or None if not found/not approved
+    """
+    table = get_table(EPISODES_TABLE)
+
+    episode = table.first(match({"Episode_Date": episode_date}))
+    if not episode:
+        logger.warning(f"Episode not found: {episode_date}")
+        return None
+
+    fields = episode["fields"]
+    status = fields.get("Status", "")
+
+    if status != "Approved":
+        logger.warning(f"Episode {episode_date} is not approved (status: {status})")
+        return None
+
+    script_json = fields.get("Script_JSON", "{}")
+    return json.loads(script_json)
+
+
+def get_included_vulnerabilities(episode_date: str) -> list[dict]:
+    """
+    Get vulnerabilities where Include_In_Episode is checked.
+
+    Allows editor to uncheck CVEs they don't want in the episode.
+
+    Args:
+        episode_date: YYYY-MM-DD format
+
+    Returns:
+        List of vulnerability records that should be included
+    """
+    table = get_table(VULNERABILITIES_TABLE)
+
+    vulns = table.all(formula=f"AND({{Episode_Date}}='{episode_date}', {{Include_In_Episode}}=TRUE())")
+
+    return [
+        {
+            "cve_id": v["fields"]["CVE_ID"],
+            "cvss_score": v["fields"]["CVSS_Score"],
+            "epss_score": v["fields"]["EPSS_Score"],
+            "severity": v["fields"]["Severity"],
+            "bluf": v["fields"].get("BLUF", ""),
+            "vendor": v["fields"].get("Vendor", ""),
+            "product": v["fields"].get("Product", "")
+        }
+        for v in vulns
+    ]
+
+
+# =============================================================================
+# Workflow Integration
+# =============================================================================
+
+def begin_rendering(episode_date: str) -> None:
+    """
+    Mark episode as Rendering before starting audio/video generation.
+
+    Prevents duplicate processing if scheduler runs again.
+    """
+    update_episode_status(episode_date, status="Rendering")
+
+
+def mark_published(episode_date: str, youtube_url: str, blog_url: str) -> None:
+    """
+    Mark episode as Published with platform URLs.
+
+    Called after publisher.py completes.
+    """
+    update_episode_status(
+        episode_date,
+        status="Published",
+        YouTube_URL=youtube_url,
+        Blog_URL=blog_url,
+        Published_At=datetime.utcnow().isoformat()
+    )
+
+
+def nuke_episode(episode_date: str, reason: str, notes: str = "") -> None:
+    """
+    Mark episode as Nuked with reason.
+
+    Called when editor decides to skip this episode.
+    """
+    update_episode_status(
+        episode_date,
+        status="Nuked",
+        Nuke_Reason=reason,
+        Editor_Notes=notes
+    )
+    logger.info(f"Episode {episode_date} nuked: {reason}")
+
+
+# =============================================================================
+# Polling / Scheduler Integration
+# =============================================================================
+
+def poll_for_approved_work() -> None:
+    """
+    Main polling function for the scheduler.
+
+    Checks for approved episodes and triggers the rendering pipeline.
+    """
+    approved = pull_approved_episodes()
+
+    for episode in approved:
+        episode_date = episode["episode_date"]
+        logger.info(f"Processing approved episode: {episode_date}")
+
+        # Mark as rendering to prevent re-processing
+        begin_rendering(episode_date)
+
+        # Write script to local file for audio_engine.py
+        script_path = f"output/episodes/{episode_date}/episode_script.json"
+        os.makedirs(os.path.dirname(script_path), exist_ok=True)
+
+        with open(script_path, "w") as f:
+            json.dump(episode["script"], f, indent=2)
+
+        logger.info(f"Wrote script to {script_path}")
+
+        # The scheduler or orchestrator would now call:
+        # 1. audio_engine.py
+        # 2. video_assembler.py
+        # 3. thumbnail_gen.py
+        # 4. mark_ready_for_upload()
+```
+
+### Usage Examples
+
+#### After filter_score.py:
+```python
+from db_sync import push_vulnerabilities
+
+with open("daily_brief_packet.json") as f:
+    packet = json.load(f)
+
+vuln_ids = push_vulnerabilities(packet)
+```
+
+#### After generate_script.py:
+```python
+from db_sync import push_episode_script
+
+with open("episode_script.json") as f:
+    script = json.load(f)
+
+episode_id = push_episode_script("2025-01-15", script, vuln_ids)
+```
+
+#### Scheduler polling:
+```python
+from db_sync import poll_for_approved_work
+
+# Run every 5 minutes
+poll_for_approved_work()
+```
+
+#### After video_assembler.py:
+```python
+from db_sync import mark_ready_for_upload
+
+mark_ready_for_upload(
+    episode_date="2025-01-15",
+    video_path="/output/episodes/2025-01-15/episode_4K.mp4",
+    audio_path="/output/episodes/2025-01-15/episode.mp3",
+    thumbnail_path="/output/episodes/2025-01-15/thumbnail.png"
+)
+```
+
+### Airtable Views (Recommended Setup)
+
+Create these views in Airtable for efficient workflow:
+
+| View Name | Filter | Purpose |
+|-----------|--------|---------|
+| `Pending Review` | Status = "Script_Generated" OR "Pending_Review" | Editor's main queue |
+| `Ready to Render` | Status = "Approved" | What the pipeline should process |
+| `Ready to Publish` | Status = "Ready_for_Upload" | Final review before going live |
+| `Published` | Status = "Published" | Archive of completed episodes |
+| `Nuked` | Status = "Nuked" | Track skipped episodes for analysis |
+| `Today's CVEs` | Episode_Date = TODAY() | Quick view of today's vulnerabilities |
+
+---
+
 ## Coding Standards
 
 ### General Principles
@@ -860,6 +1365,10 @@ GEMINI_API_KEY=your_key_here
 ANTHROPIC_API_KEY=your_key_here      # or OPENAI_API_KEY
 NVD_API_KEY=your_key_here            # optional but recommended
 
+# Airtable (Review Dashboard)
+AIRTABLE_API_KEY=your_personal_access_token
+AIRTABLE_BASE_ID=appXXXXXXXXXXXXXX   # Starts with 'app'
+
 # YouTube (OAuth credentials)
 YOUTUBE_CLIENT_ID=your_client_id
 YOUTUBE_CLIENT_SECRET=your_secret
@@ -885,15 +1394,20 @@ Full system design: `docs/plans/2025-12-29-ai-podcast-design.md`
 ### Pipeline Order
 
 ```
-1. ingest_data.py      - Pull from APIs
+1. ingest_data.py      - Pull from APIs (NVD, CISA, EPSS)
 2. filter_score.py     - Apply priority matrix
-3. generate_script.py  - LLM creates dialogue
-4. audio_engine.py     - TTS generation
-5. video_assembler.py  - Create MP4
-6. thumbnail_gen.py    - Create thumbnail
-7. web_publisher.py    - Generate blog/social
-8. [REVIEW DASHBOARD]  - Human approval
-9. publisher.py        - Push to platforms
+3. db_sync.py          - Push CVEs to Airtable (Vulnerabilities table)
+4. generate_script.py  - LLM creates dialogue
+5. db_sync.py          - Push script to Airtable (Episodes table)
+   ─────────────────── HUMAN REVIEW IN AIRTABLE ───────────────────
+6. db_sync.py          - Poll for Approved episodes
+7. audio_engine.py     - TTS generation (ElevenLabs v3)
+8. video_assembler.py  - Create MP4 (FFmpeg filtergraph)
+9. thumbnail_gen.py    - Create thumbnail (Nano Banana Pro)
+10. db_sync.py         - Update status to Ready_for_Upload
+    ─────────────────── OPTIONAL FINAL REVIEW ───────────────────
+11. publisher.py       - Push to YouTube, RSS, Blog, Social
+12. db_sync.py         - Update status to Published
 ```
 
 ### Key Thresholds
