@@ -206,6 +206,11 @@ publisher.py        --> publish_result.json
     {"index": 1, "speaker": "Alex", "start_ms": 8500, "end_ms": 24000},
     {"index": 2, "speaker": "Morgan", "start_ms": 24000, "end_ms": 31500}
   ],
+  "character_timestamps": [
+    {"index": 0, "characters": [{"char": "G", "start_ms": 0, "end_ms": 120}, {"char": "o", "start_ms": 120, "end_ms": 180}]},
+    {"index": 1, "characters": []},
+    {"index": 2, "characters": []}
+  ],
   "sources": {
     "input_file": "episode_script.json",
     "tts_provider": "elevenlabs",
@@ -213,6 +218,232 @@ publisher.py        --> publish_result.json
   }
 }
 ```
+
+---
+
+## ElevenLabs v3 Text-to-Dialogue Integration
+
+### CRITICAL: This section is the Source of Truth for audio generation.
+
+### Script Generator Output Requirements
+
+The `generate_script.py` module MUST output dialogue in a format compatible with ElevenLabs v3 Text-to-Dialogue. Each dialogue item requires:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `voice_id` | string | YES | ElevenLabs voice ID for this speaker |
+| `text` | string | YES | The spoken text with narrative tags |
+| `chunk_type` | string | YES | Either `"spoken"` or `"contextual"` |
+| `seed` | integer | YES | Fixed seed for voice consistency |
+
+#### chunk_type Values
+
+- `"spoken"` - Normal dialogue that will be synthesized to audio
+- `"contextual"` - Stage directions or context (e.g., "[Morgan looks concerned]") - NOT synthesized but used for emotional context
+
+### episode_script.json (ElevenLabs-Ready Format)
+
+```json
+{
+  "episode_date": "2025-01-15",
+  "runtime_estimate_seconds": 390,
+  "dialogue": [
+    {
+      "index": 0,
+      "speaker": "Alex",
+      "voice_id": "pNInz6obpgDQGcFmaJgB",
+      "seed": 42819,
+      "chunk_type": "spoken",
+      "text": "[serious tone] Good morning. We have one critical and four high-severity vulnerabilities to cover today.",
+      "cve_refs": [],
+      "tags": ["serious tone"]
+    },
+    {
+      "index": 1,
+      "speaker": "Alex",
+      "voice_id": "pNInz6obpgDQGcFmaJgB",
+      "seed": 42819,
+      "chunk_type": "spoken",
+      "text": "Let's start with the most urgent. C[pause:100ms]V[pause:100ms]E[pause:200ms]twenty twenty-five[pause:200ms]one two three four affects Apache Tomcat versions nine dot zero through nine dot zero dot eighty-two. [pause:1.5s] This is a remote code execution vulnerability.",
+      "cve_refs": ["CVE-2025-1234"],
+      "tags": []
+    },
+    {
+      "index": 2,
+      "speaker": "Morgan",
+      "voice_id": "EXAVITQu4vr4xnSDxMaL",
+      "seed": 73621,
+      "chunk_type": "spoken",
+      "text": "[interruption] Hold on - that's the web server running half our infrastructure. What's the attack vector?",
+      "cve_refs": ["CVE-2025-1234"],
+      "tags": ["interruption"]
+    }
+  ],
+  "sources": {
+    "input_file": "daily_brief_packet.json",
+    "llm_model": "claude-3-5-sonnet",
+    "prompt_version": "1.0"
+  }
+}
+```
+
+### Audio Engine Implementation Requirements
+
+The `audio_engine.py` module MUST:
+
+#### 1. Use ElevenLabs v3 Text-to-Dialogue Endpoint
+
+```python
+# Endpoint: POST /v3/text-to-dialogue
+# NOT the standard text-to-speech endpoint
+
+import requests
+
+ELEVENLABS_API_URL = "https://api.elevenlabs.io/v3/text-to-dialogue"
+```
+
+#### 2. Request Character-Level Timestamps
+
+**This is CRITICAL for FFmpeg visual sync.**
+
+```python
+def generate_dialogue(script: dict) -> dict:
+    """
+    Generate audio using ElevenLabs v3 Text-to-Dialogue.
+
+    MUST request character-level timestamps for video_assembler.py
+    to sync visuals (speaker indicators, lower thirds, waveforms).
+    """
+
+    payload = {
+        "dialogue": [
+            {
+                "voice_id": line["voice_id"],
+                "text": line["text"],
+                "chunk_type": line["chunk_type"],
+                "voice_settings": {
+                    "seed": line["seed"]
+                }
+            }
+            for line in script["dialogue"]
+            if line["chunk_type"] == "spoken"
+        ],
+        "output_format": "mp3_44100_320",
+
+        # CRITICAL: Enable character-level timestamps
+        "timestamps": {
+            "enabled": True,
+            "granularity": "character"  # Options: "word", "character"
+        }
+    }
+
+    response = requests.post(
+        ELEVENLABS_API_URL,
+        headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]},
+        json=payload
+    )
+
+    return response.json()
+```
+
+#### 3. Parse Timestamp Response
+
+The API returns character-level timing data:
+
+```json
+{
+  "audio": "base64_encoded_audio...",
+  "timestamps": {
+    "lines": [
+      {
+        "line_index": 0,
+        "start_ms": 0,
+        "end_ms": 8500,
+        "characters": [
+          {"char": "G", "start_ms": 0, "end_ms": 120},
+          {"char": "o", "start_ms": 120, "end_ms": 180},
+          {"char": "o", "start_ms": 180, "end_ms": 240},
+          {"char": "d", "start_ms": 240, "end_ms": 320}
+        ]
+      },
+      {
+        "line_index": 1,
+        "start_ms": 8500,
+        "end_ms": 24000,
+        "characters": []
+      }
+    ]
+  }
+}
+```
+
+#### 4. Output to audio_manifest.json
+
+The audio engine MUST write timestamps to the manifest for `video_assembler.py`:
+
+```python
+def write_audio_manifest(episode_date: str, audio_path: str, api_response: dict) -> None:
+    """
+    Write audio manifest with character-level timestamps.
+
+    video_assembler.py uses these timestamps to:
+    - Sync speaker indicator highlights
+    - Display CVE IDs in lower thirds at exact moments
+    - Generate accurate chapter markers
+    - Align waveform visualization
+    """
+
+    manifest = {
+        "episode_date": episode_date,
+        "audio_file": audio_path,
+        "duration_seconds": calculate_duration(api_response),
+        "format": "mp3",
+        "bitrate": "320kbps",
+
+        # Line-level timestamps (for chapters, speaker switches)
+        "line_timestamps": [
+            {
+                "index": line["line_index"],
+                "speaker": get_speaker_for_line(line["line_index"]),
+                "start_ms": line["start_ms"],
+                "end_ms": line["end_ms"]
+            }
+            for line in api_response["timestamps"]["lines"]
+        ],
+
+        # Character-level timestamps (for precise visual sync)
+        "character_timestamps": [
+            {
+                "index": line["line_index"],
+                "characters": line["characters"]
+            }
+            for line in api_response["timestamps"]["lines"]
+        ],
+
+        # Chapters derived from CVE references
+        "chapters": generate_chapters_from_timestamps(api_response),
+
+        "sources": {
+            "input_file": "episode_script.json",
+            "tts_provider": "elevenlabs",
+            "api_version": "v3"
+        }
+    }
+
+    with open(f"output/episodes/{episode_date}/audio_manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+```
+
+### Why Character-Level Timestamps Matter
+
+| Use Case | How Timestamps Are Used |
+|----------|-------------------------|
+| **Speaker indicator** | Highlight Alex/Morgan based on `line_timestamps[].speaker` |
+| **Lower third CVE display** | Show CVE ID when character reaches that word |
+| **Lip sync (future)** | Character timing enables avatar mouth movement |
+| **Waveform alignment** | Precise audio-to-visual sync |
+| **Chapter markers** | Accurate YouTube/Spotify chapters |
+| **Re-render single line** | Know exact splice points for cost-saving edits |
 
 ---
 
