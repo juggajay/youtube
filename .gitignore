@@ -1,0 +1,73 @@
+# Environment
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Output files
+output/
+data/*.json
+!data/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# API keys and secrets
+*.pem
+*.key
+credentials.json
+token.json
+
+# Audio/Video files (large)
+*.mp3
+*.mp4
+*.wav
+*.avi
+*.mov
+
+# Exception: Keep branding audio assets
+!assets/audio/intro_sting.mp3
+!assets/audio/outro_bed.mp3
+
+# Images (generated)
+output/**/*.png
+output/**/*.jpg
