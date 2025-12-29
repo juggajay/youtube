@@ -1,11 +1,8 @@
 name: Daily Security Brief Pipeline
 
 on:
-  # 1. Schedule: Runs at 19:00 UTC (6:00 AM Sydney AEDT)
   schedule:
     - cron: '0 19 * * *'
-
-  # 2. Manual Trigger: Button to run anytime from GitHub UI
   workflow_dispatch:
     inputs:
       force_date:
@@ -23,112 +20,93 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    # --- SETUP PHASE ---
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: 'pip'
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
-    - name: Install System Dependencies (FFmpeg)
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
-    - name: Install Python Dependencies
-      run: |
-        pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Install Python Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
-    # --- ASSET SETUP ---
-    - name: Ensure Assets Directory
-      run: |
-        mkdir -p data
-        mkdir -p output/episodes
-        mkdir -p logs
+      - name: Ensure Directories
+        run: |
+          mkdir -p data
+          mkdir -p output/episodes
+          mkdir -p logs
 
-    # --- SECRET MANAGEMENT ---
-    - name: Decode YouTube Client Secrets
-      env:
-        CLIENT_SECRETS_B64: ${{ secrets.YOUTUBE_CLIENT_SECRETS_B64 }}
-      run: |
-        if [ -n "$CLIENT_SECRETS_B64" ]; then
-          echo $CLIENT_SECRETS_B64 | base64 --decode > data/client_secrets.json
-          echo "Client secrets decoded successfully"
-        else
-          echo "Warning: No YouTube client secrets configured"
-        fi
+      - name: Decode YouTube Client Secrets
+        env:
+          CLIENT_SECRETS_B64: ${{ secrets.YOUTUBE_CLIENT_SECRETS_B64 }}
+        run: |
+          if [ -n "$CLIENT_SECRETS_B64" ]; then
+            echo "$CLIENT_SECRETS_B64" | base64 --decode > data/client_secrets.json
+            echo "Client secrets decoded"
+          fi
 
-    - name: Setup YouTube Refresh Token
-      env:
-        YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-      run: python scripts/setup_youtube_token.py
+      - name: Setup YouTube Token
+        env:
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python scripts/setup_youtube_token.py
 
-    # --- EXECUTION PHASE ---
-    - name: Run Orchestrator
-      env:
-        # API Keys injected from GitHub Secrets
-        NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+      - name: Run Orchestrator
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          LOG_LEVEL: INFO
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.force_date }}" ]; then
+            ARGS="$ARGS --date ${{ inputs.force_date }}"
+          fi
+          if [ "${{ inputs.mock_mode }}" == "true" ]; then
+            ARGS="$ARGS --mock"
+          fi
+          echo "Running: python -m src.orchestrator $ARGS"
+          python -m src.orchestrator $ARGS
 
-        # Config
-        LOG_LEVEL: "INFO"
-      run: |
-        # Build command arguments
-        ARGS=""
+      - name: Upload Episode Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: episode-${{ github.run_number }}
+          path: |
+            output/episodes/**/daily_brief_packet.json
+            output/episodes/**/episode_script.json
+            output/episodes/**/thumbnail.png
+            output/episodes/**/publish_manifest.json
+            output/episodes/**/video_manifest.json
+          retention-days: 7
+          if-no-files-found: ignore
 
-        # If manual date provided, use it
-        if [ "${{ inputs.force_date }}" != "" ]; then
-          ARGS="$ARGS --date ${{ inputs.force_date }}"
-        fi
+      - name: Upload Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 3
+          if-no-files-found: ignore
 
-        # If mock mode enabled
-        if [ "${{ inputs.mock_mode }}" == "true" ]; then
-          ARGS="$ARGS --mock"
-        fi
-
-        echo "Running: python -m src.orchestrator $ARGS"
-        python -m src.orchestrator $ARGS
-
-    # --- ARTIFACTS (DEBUGGING) ---
-    - name: Upload Episode Artifacts
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: episode-${{ github.run_number }}
-        path: |
-          output/episodes/**/daily_brief_packet.json
-          output/episodes/**/episode_script.json
-          output/episodes/**/thumbnail.png
-          output/episodes/**/publish_manifest.json
-          output/episodes/**/video_manifest.json
-        retention-days: 7
-        if-no-files-found: ignore
-
-    - name: Upload Logs
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: logs-${{ github.run_number }}
-        path: logs/
-        retention-days: 3
-        if-no-files-found: ignore
-
-    # --- NOTIFICATION ---
-    - name: Summary
-      if: always()
-      run: |
-        echo "## Pipeline Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-
-        if [ -f output/episodes/*/publish_manifest.json ]; then
-          echo "### Published Episode" >> $GITHUB_STEP_SUMMARY
-          cat output/episodes/*/publish_manifest.json >> $GITHUB_STEP_SUMMARY
-        else
-          echo "No episode published (check logs for details)" >> $GITHUB_STEP_SUMMARY
-        fi
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          if [ -f output/episodes/*/publish_manifest.json ]; then
+            echo "### Published Episode" >> $GITHUB_STEP_SUMMARY
+            cat output/episodes/*/publish_manifest.json >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No episode published" >> $GITHUB_STEP_SUMMARY
+          fi
