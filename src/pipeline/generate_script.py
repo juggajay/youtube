@@ -273,7 +273,7 @@ def _generate_llm_dialogue(
             genai.configure(api_key=api_key)
 
             model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash",
+                model_name="gemini-3-flash-preview",
                 generation_config={
                     "temperature": 0.7,
                     "max_output_tokens": 8000,
