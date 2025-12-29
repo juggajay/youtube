@@ -103,34 +103,83 @@ def render_text(image: Image.Image, text: str, color: str, font_path: str) -> Im
 
 def determine_text(daily_brief: dict) -> tuple:
     """
-    Returns (text, hex_color) based on priority logic.
+    Returns (text, hex_color) based on top threat.
 
-    Priority 1: Tier-1 vendor -> "PATCH [VENDOR]" (red)
-    Priority 2: Critical count > 0 -> "[X] CRITICAL" (red)
-    Priority 3: High count > 0 -> "[X] HIGH RISK" (yellow)
-    Priority 4: Quiet day -> "DAILY INTEL" (cyan)
+    Logic:
+    1. Find highest severity CVE and extract vendor name
+    2. Combine vendor + severity for actionable headline
+    3. Fall back to top news story if no CVEs
+    4. "DAILY INTEL" for quiet days
+
+    Examples:
+    - "MONGODB CRITICAL" (red)
+    - "CISCO HIGH RISK" (yellow)
+    - "CONDE NAST BREACH" (red)
+    - "DAILY INTEL" (cyan)
     """
     vulns = daily_brief.get("vulnerabilities", [])
-    stats = daily_brief.get("filter_stats", {"critical_count": 0, "high_count": 0})
+    stories = daily_brief.get("top_stories", [])
+
+    # --- Priority 1: Find top CVE by severity ---
+    if vulns:
+        # Sort by CVSS score descending
+        sorted_vulns = sorted(
+            vulns,
+            key=lambda v: v.get("cvss_score", 0),
+            reverse=True
+        )
+        top_vuln = sorted_vulns[0]
+        cvss = top_vuln.get("cvss_score", 0)
+
+        # Extract vendor name (clean it up)
+        vendor = top_vuln.get("vendor", "").upper().strip()
+        product = top_vuln.get("product", "").upper().strip()
+
+        # Prefer vendor, fall back to product
+        name = vendor if vendor else product
+
+        # Check for Tier-1 vendor match (use full name)
+        for t1 in TIER_1_VENDORS:
+            if t1 in vendor or t1 in product:
+                name = t1
+                break
+
+        if name:
+            # Determine severity label
+            if cvss >= 9.0:
+                return f"{name} CRITICAL", "#FF0000"
+            elif cvss >= 7.0:
+                return f"{name} HIGH RISK", "#FFD700"
+            else:
+                return f"{name} ALERT", "#FFA500"
+
+    # --- Priority 2: Check for breach/news stories ---
+    if stories:
+        top_story = stories[0] if isinstance(stories[0], dict) else {"title": str(stories[0])}
+        title = top_story.get("title", "").upper()
+
+        # Check for breach keywords
+        if "BREACH" in title or "HACK" in title or "LEAK" in title or "STOLEN" in title:
+            # Try to extract company name (first 1-2 words usually)
+            words = title.split()[:2]
+            company = " ".join(words).replace(":", "").replace(",", "")
+            return f"{company} BREACH", "#FF0000"
+
+        # Check for ransomware
+        if "RANSOMWARE" in title:
+            return "RANSOMWARE ALERT", "#FF0000"
+
+    # --- Priority 3: Fall back to counts if we have them ---
+    stats = daily_brief.get("filter_stats", {})
     critical_count = stats.get("critical_count", 0)
     high_count = stats.get("high_count", 0)
 
-    # Priority 1: Tier-1 vendor override
-    for vuln in vulns:
-        vendor = vuln.get("vendor", "").upper()
-        for t1 in TIER_1_VENDORS:
-            if t1 in vendor:
-                return f"PATCH {t1}", "#FF0000"
-
-    # Priority 2: Critical count
     if critical_count > 0:
         return f"{critical_count} CRITICAL", "#FF0000"
-
-    # Priority 3: High count
     if high_count > 0:
         return f"{high_count} HIGH RISK", "#FFD700"
 
-    # Priority 4: Quiet day fallback
+    # --- Priority 4: Quiet day ---
     return "DAILY INTEL", "#00FFFF"
 
 
