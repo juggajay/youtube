@@ -185,11 +185,15 @@ def run_pipeline(
             logger.error("No packet found. Run filter step first.")
             return results
 
-    # Check if we have vulnerabilities to process
-    if not included:
-        logger.warning("No vulnerabilities passed the Priority Matrix. Consider nuking today's episode.")
+    # Check if we have content to process (CVEs OR stories)
+    if not included and not stories:
+        logger.warning("No vulnerabilities passed and no news stories. Nuking today's episode.")
         results["steps"]["filter"] = {"status": "no_content"}
         return results
+
+    if not included:
+        logger.info("No CVEs passed Priority Matrix, but we have news stories. Continuing with news-only episode.")
+        results["steps"]["filter"]["note"] = "news_only_episode"
 
     # Step 3: Generate script
     if "script" in steps_to_run:
