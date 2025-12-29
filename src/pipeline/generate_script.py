@@ -17,6 +17,189 @@ from ..utils import get_config, get_logger, is_mock_mode
 logger = get_logger(__name__)
 
 
+# =============================================================================
+# PRONUNCIATION FIXES
+# Maps words/phrases to phonetic versions for better TTS pronunciation
+# =============================================================================
+PRONUNCIATION_FIXES = {
+    # Company/Brand Names
+    "Condé Nast": "Kon-day Nast",
+    "Conde Nast": "Kon-day Nast",
+    "Huawei": "Wah-way",
+    "Xiaomi": "Shao-me",
+    "Asus": "Ay-soos",
+    "Veritas": "Vair-ih-tass",
+    "Akamai": "Ah-kah-my",
+    "Qualys": "Kwah-liss",
+    "CrowdStrike": "Crowd Strike",
+    "SentinelOne": "Sentinel One",
+    "Palo Alto": "Pah-lo Al-toe",
+    "Fortinet": "For-tih-net",
+    "Sophos": "So-foss",
+    "Zscaler": "Zee-scaler",
+    "Okta": "Ock-tah",
+    "Splunk": "Splunk",
+    "Tenable": "Ten-ah-bull",
+    "Ivanti": "Eye-van-tee",
+    "Citrix": "Sit-ricks",
+    "VMware": "V M ware",
+    "Atlassian": "At-lass-ee-an",
+
+    # Technical Terms
+    "nginx": "engine X",
+    "NGINX": "engine X",
+    "kubectl": "kube control",
+    "sudo": "sue-doo",
+    "OAuth": "Oh-Auth",
+    "OAuth2": "Oh-Auth two",
+    "SAML": "Sam-el",
+    "LDAP": "L-dap",
+    "SSRF": "server side request forgery",
+    "CSRF": "cross site request forgery",
+    "XSS": "cross site scripting",
+    "RCE": "remote code execution",
+    "SQLi": "SQL injection",
+    "LFI": "local file inclusion",
+    "RFI": "remote file inclusion",
+    "IDOR": "eye-door",
+    "XXE": "X X E",
+    "SIEM": "seem",
+    "SOAR": "sore",
+    "EDR": "E D R",
+    "XDR": "X D R",
+    "MDR": "M D R",
+    "MSSP": "M S S P",
+    "IoT": "I o T",
+    "OT": "O T",
+    "ICS": "I C S",
+    "SCADA": "skay-dah",
+    "PLC": "P L C",
+    "API": "A P I",
+    "APIs": "A P I s",
+    "CLI": "C L I",
+    "GUI": "gooey",
+    "UUID": "you-id",
+    "JSON": "jay-son",
+    "YAML": "yam-el",
+    "TOML": "tom-el",
+    "regex": "red-jex",
+    "RegEx": "red-jex",
+    "DevOps": "Dev Ops",
+    "DevSecOps": "Dev Sec Ops",
+    "GitOps": "Git Ops",
+    "SaaS": "sass",
+    "PaaS": "pass",
+    "IaaS": "eye-ass",
+    "K8s": "kubernetes",
+    "k8s": "kubernetes",
+
+    # Security Terms
+    "CISA": "see-sah",
+    "NIST": "nist",
+    "MITRE": "my-ter",
+    "ATT&CK": "attack",
+    "CVE": "C V E",
+    "CVSS": "C V S S",
+    "EPSS": "E P S S",
+    "KEV": "K E V",
+    "PoC": "proof of concept",
+    "POC": "proof of concept",
+    "APT": "A P T",
+    "APT29": "A P T 29",
+    "APT28": "A P T 28",
+    "APT41": "A P T 41",
+    "TTPs": "T T Ps",
+    "IOCs": "I O Cs",
+    "IOC": "I O C",
+    "C2": "C 2",
+    "C&C": "command and control",
+    "RAT": "R A T",
+    "MFA": "M F A",
+    "2FA": "two factor authentication",
+    "SSO": "S S O",
+    "PKI": "P K I",
+    "HSM": "H S M",
+    "TPM": "T P M",
+    "DLP": "D L P",
+    "WAF": "wahf",
+    "IDS": "I D S",
+    "IPS": "I P S",
+    "NGFW": "next gen firewall",
+    "VPN": "V P N",
+    "SSL": "S S L",
+    "TLS": "T L S",
+    "HTTPS": "H T T P S",
+    "HTTP": "H T T P",
+    "DNS": "D N S",
+    "DoS": "denial of service",
+    "DDoS": "D dos",
+    "botnet": "bot-net",
+    "ransomware": "ransom-ware",
+    "malware": "mal-ware",
+    "spyware": "spy-ware",
+    "rootkit": "root-kit",
+    "keylogger": "key-logger",
+    "phishing": "fishing",
+    "vishing": "vishing",
+    "smishing": "smishing",
+    "whaling": "way-ling",
+    "exfil": "ex-fill",
+    "exfiltration": "ex-fill-tray-shun",
+    "pwned": "poned",
+    "pwn": "pone",
+    "0day": "zero day",
+    "0-day": "zero day",
+
+    # File Extensions & Protocols
+    ".exe": "dot E X E",
+    ".dll": "dot D L L",
+    ".py": "dot pie",
+    ".js": "dot J S",
+    ".ts": "dot T S",
+    ".sh": "dot S H",
+    ".ps1": "dot P S one",
+    "SMB": "S M B",
+    "RDP": "R D P",
+    "SSH": "S S H",
+    "FTP": "F T P",
+    "SFTP": "S F T P",
+    "SCP": "S C P",
+    "NFS": "N F S",
+    "CIFS": "siffs",
+
+    # Vendors from today's episode
+    "MongoDB": "Mongo D B",
+    "ZSpace": "Z Space",
+    "Wired": "Wired",
+}
+
+
+def apply_pronunciation_fixes(text: str) -> str:
+    """
+    Apply pronunciation fixes to text for better TTS output.
+
+    Replaces words/phrases with phonetic versions that sound better
+    when spoken by text-to-speech engines.
+
+    Args:
+        text: Original text
+
+    Returns:
+        Text with pronunciation fixes applied
+    """
+    result = text
+
+    # Sort by length (longest first) to avoid partial replacements
+    sorted_fixes = sorted(PRONUNCIATION_FIXES.items(), key=lambda x: len(x[0]), reverse=True)
+
+    for original, phonetic in sorted_fixes:
+        # Case-insensitive replacement while preserving surrounding context
+        pattern = re.compile(re.escape(original), re.IGNORECASE)
+        result = pattern.sub(phonetic, result)
+
+    return result
+
+
 # System prompt for script generation
 SYSTEM_PROMPT = """You are writing a daily cybersecurity podcast script. Two hosts, real conversation, not a script reading.
 
@@ -169,13 +352,17 @@ def generate_episode_script(
         speaker = line["speaker"].lower()
         voice = voice_config.get(speaker, {})
 
+        # Apply pronunciation fixes for better TTS output
+        fixed_text = apply_pronunciation_fixes(line["text"])
+
         enriched_dialogue.append({
             "index": i,
             "speaker": line["speaker"],
             "voice_id": voice.get("voice_id", ""),
             "seed": voice.get("seed", 0),
             "chunk_type": "spoken",
-            "text": line["text"],
+            "text": fixed_text,
+            "original_text": line["text"],  # Keep original for reference
             "cve_refs": line.get("cve_refs", []),
             "story_refs": line.get("story_refs", []),
             "tags": _extract_tags(line["text"]),
