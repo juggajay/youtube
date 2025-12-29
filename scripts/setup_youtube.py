@@ -29,16 +29,16 @@ def main():
     print("=" * 60)
 
     if is_youtube_authenticated():
-        print("\n✓ Already authenticated with YouTube!")
+        print("\n[OK] Already authenticated with YouTube!")
         print("  Token stored at: data/youtube_token.pickle")
         response = input("\nRe-authenticate? (y/N): ")
         if response.lower() != "y":
             return
 
     # Check for client secrets
-    secrets_path = Path("client_secrets.json")
+    secrets_path = Path("data/client_secrets.json")
     if not secrets_path.exists():
-        print("\n✗ client_secrets.json not found!")
+        print("\n[ERROR] data/client_secrets.json not found!")
         print("\nTo get credentials:")
         print("1. Go to https://console.cloud.google.com")
         print("2. Create a new project (or select existing)")
@@ -56,12 +56,12 @@ def main():
 
     if success:
         print("\n" + "=" * 60)
-        print("✓ YouTube authentication successful!")
+        print("[OK] YouTube authentication successful!")
         print("=" * 60)
         print("\nThe pipeline can now upload videos automatically.")
         print("Token will refresh automatically when needed.")
     else:
-        print("\n✗ Authentication failed. Check the logs for details.")
+        print("\n[ERROR] Authentication failed. Check the logs for details.")
 
 
 if __name__ == "__main__":

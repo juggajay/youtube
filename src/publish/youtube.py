@@ -43,7 +43,7 @@ YOUTUBE_SCOPES = [
 
 # Token storage location
 TOKEN_PATH = Path("data/youtube_token.pickle")
-CLIENT_SECRETS_PATH = Path("client_secrets.json")
+CLIENT_SECRETS_PATH = Path("data/client_secrets.json")
 
 
 def is_youtube_authenticated() -> bool:
