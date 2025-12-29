@@ -29,15 +29,15 @@ wondercraft_voices:
     name: "Melody"
     voice_id: ""  # TODO: Add your Wondercraft voice ID for Melody
 
-# Priority Matrix thresholds (lowered for testing)
+# Priority Matrix thresholds (adjusted for 8+ min episodes)
 priority_matrix:
   critical:
     # CISA KEV is always critical (handled separately)
     cvss_min: 7.0
-    epss_min: 0.01
+    epss_min: 0.001   # Very low - almost any CVSS 7+ passes
   high:
-    cvss_min: 5.0
-    epss_min: 0.001
+    cvss_min: 4.0     # Include medium severity
+    epss_min: 0.0     # No EPSS requirement for high
 
 # Data sources
 sources:

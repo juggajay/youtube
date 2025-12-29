@@ -306,8 +306,8 @@ def run_pipeline(
                 # Audit video (checks duration, audio levels, file size)
                 audit_result = audit_episode(
                     video_file,
-                    min_duration_sec=60,   # 1 min minimum (lowered for testing)
-                    min_size_mb=10,        # 10 MB minimum (lowered for testing)
+                    min_duration_sec=300,  # 5 min minimum
+                    min_size_mb=30,        # 30 MB minimum
                 )
                 results["steps"]["audit"] = {
                     "passed": True,
@@ -529,16 +529,17 @@ def _select_stories_for_episode(stories: list, vulnerabilities: list) -> list:
         filtered_stories.append(story)
 
     # Determine how many stories based on CVE count
+    # Increased story counts to help reach 8+ minute target
     vuln_count = len(vulnerabilities)
-    if vuln_count >= 5:
-        # Many CVEs - just 1-2 top stories
-        max_stories = 2
-    elif vuln_count >= 3:
-        # Moderate CVEs - 2-3 stories
+    if vuln_count >= 10:
+        # Many CVEs - still include stories for variety
         max_stories = 3
+    elif vuln_count >= 5:
+        # Moderate CVEs - good balance
+        max_stories = 4
     else:
         # Few CVEs - more stories to fill time
-        max_stories = 5
+        max_stories = 6
 
     # Prioritize high-impact story types
     priority_types = ["breach", "ransomware", "apt", "threat_intel"]
