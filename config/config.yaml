@@ -1,0 +1,109 @@
+# Podcast Pipeline Configuration
+
+# Episode settings
+episode:
+  target_duration_minutes: 5-8
+  max_vulnerabilities: 15
+  publish_time: "07:00"  # Target publish time (local)
+
+# Voice personas (ElevenLabs V3)
+voices:
+  alec:
+    name: "Alec"
+    role: "Security Analyst Expert"
+    voice_id: "1SM7GgM6IMuvQlz2BwM3"  # Male voice
+    color: "0x00FFFF"  # Cyan
+  melody:
+    name: "Melody"
+    role: "Host / Tech Journalist"
+    voice_id: "tnSpp4vdxKPjI9w0GnoV"  # Female voice
+    color: "0xFF6600"  # Orange
+
+# Wondercraft voices (primary - more natural podcast audio)
+# Get voice IDs from: https://app.wondercraft.ai (copy from voice selector)
+wondercraft_voices:
+  alec:
+    name: "Alec"
+    voice_id: ""  # TODO: Add your Wondercraft voice ID for Alec
+  melody:
+    name: "Melody"
+    voice_id: ""  # TODO: Add your Wondercraft voice ID for Melody
+
+# Priority Matrix thresholds
+priority_matrix:
+  critical:
+    # CISA KEV is always critical (handled separately)
+    cvss_min: 9.0
+    epss_min: 0.10
+  high:
+    cvss_min: 7.0
+    epss_min: 0.30
+
+# Data sources
+sources:
+  nvd:
+    base_url: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    rate_limit_delay: 6  # seconds between requests (without API key)
+  cisa_kev:
+    url: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+  epss:
+    base_url: "https://api.first.org/data/v1/epss"
+
+# Video settings
+video:
+  resolution:
+    width: 3840
+    height: 2160
+  fps: 30
+  codec: "libx264"
+  crf: 18
+  preset: "slow"  # Use "fast" for drafts
+
+# Paths
+paths:
+  output: "output/episodes"
+  assets: "assets"
+  data: "data"
+
+# Mock mode (for testing without API keys)
+mock_mode:
+  enabled: false
+  llm: false     # Use real Claude API
+  tts: false     # Use real ElevenLabs V3
+  thumbnail: true # Use placeholder image
+
+# Publishing configuration
+publish:
+  # YouTube upload settings
+  youtube:
+    enabled: true
+    playlist_name: "Daily Security Brief"  # Auto-creates if doesn't exist
+    category_id: "28"  # Science & Technology
+    privacy_status: "public"  # public, private, unlisted
+
+  # RSS/Podcast feed settings
+  rss:
+    enabled: true
+    feed_path: "output/podcast.xml"
+    audio_base_url: ""  # e.g., "https://cdn.example.com/podcast"
+    title: "Daily Security Brief"
+    description: "Your daily cybersecurity vulnerability briefing. Critical CVEs, patches, and threat intel delivered in under 10 minutes."
+    author: "Security Brief Team"
+    email: "podcast@example.com"
+    website: "https://example.com/podcast"
+    image_url: "https://example.com/podcast-cover.jpg"
+    language: "en-us"
+    category: "Technology"
+    subcategory: "Tech News"
+
+  # Blog post settings
+  blog:
+    enabled: false
+    platform: "markdown"  # wordpress, ghost, or markdown
+    # WordPress settings (if platform: wordpress)
+    wordpress_url: ""
+    wordpress_user: ""
+    wordpress_app_password: ""
+    # Ghost settings (if platform: ghost)
+    ghost_url: ""
+    ghost_admin_key: ""  # format: id:secret
