@@ -304,11 +304,8 @@ def run_pipeline(
 
             try:
                 # Audit video (checks duration, audio levels, file size)
-                audit_result = audit_episode(
-                    video_file,
-                    min_duration_sec=120,  # 2 min minimum (temporary for testing)
-                    min_size_mb=20,        # 20 MB minimum
-                )
+                # Thresholds auto-adjust: 1080p on GitHub Actions, 4K locally
+                audit_result = audit_episode(video_file)
                 results["steps"]["audit"] = {
                     "passed": True,
                     "duration_minutes": audit_result["duration_minutes"],

@@ -7,8 +7,10 @@ The "Idiot Check" - runs before uploading to prevent:
 - Corrupt/incomplete renders
 - Videos too short for mid-roll ads
 
+Automatically adjusts thresholds for GitHub Actions (1080p) vs Local (4K).
+
 Usage:
-    python -m src.utils.audit output/episodes/2025-01-01/episode_2025-01-01_4K.mp4
+    python -m src.utils.audit output/episodes/2025-01-01/episode_2025-01-01_1920x1080.mp4
 """
 
 import json
@@ -21,6 +23,25 @@ from pathlib import Path
 from . import get_logger
 
 logger = get_logger(__name__)
+
+
+def get_audit_thresholds():
+    """
+    Returns audit thresholds based on environment.
+    GitHub Actions uses 1080p with lower bitrate, so file sizes are smaller.
+    """
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        logger.info("Detected GitHub Actions: Using 1080p thresholds")
+        return {
+            "min_duration_sec": 120,  # 2 minutes minimum
+            "min_size_mb": 5.0,       # 1080p ultrafast CRF 28 = smaller files
+        }
+    else:
+        logger.info("Local environment: Using 4K thresholds")
+        return {
+            "min_duration_sec": 180,  # 3 minutes minimum
+            "min_size_mb": 50.0,      # 4K medium CRF 18 = larger files
+        }
 
 
 def get_media_info(file_path: str) -> dict:
@@ -139,8 +160,8 @@ def detect_black_frames(file_path: str, sample_count: int = 5) -> bool:
 
 def audit_episode(
     video_path: str,
-    min_duration_sec: int = 180,
-    min_size_mb: float = 50,
+    min_duration_sec: int = None,
+    min_size_mb: float = None,
     silence_threshold_db: float = -60,
 ) -> dict:
     """
@@ -149,15 +170,17 @@ def audit_episode(
     Checks:
     1. File exists and is readable
     2. Container is valid (ffprobe can read it)
-    3. Duration meets minimum (default 3 min)
+    3. Duration meets minimum
     4. Has audio stream
     5. Audio is not silent
-    6. File size is reasonable for 4K
+    6. File size is reasonable
+
+    Thresholds auto-adjust for GitHub Actions (1080p) vs Local (4K).
 
     Args:
         video_path: Path to the video file
-        min_duration_sec: Minimum duration in seconds
-        min_size_mb: Minimum file size in MB (catches black screen renders)
+        min_duration_sec: Minimum duration in seconds (auto-detected if None)
+        min_size_mb: Minimum file size in MB (auto-detected if None)
         silence_threshold_db: Volume threshold for silence detection
 
     Returns:
@@ -167,7 +190,15 @@ def audit_episode(
         FileNotFoundError: Video file doesn't exist
         ValueError: Video fails any quality check
     """
+    # Get environment-appropriate thresholds
+    thresholds = get_audit_thresholds()
+    if min_duration_sec is None:
+        min_duration_sec = thresholds["min_duration_sec"]
+    if min_size_mb is None:
+        min_size_mb = thresholds["min_size_mb"]
+
     logger.info(f"Auditing: {os.path.basename(video_path)}")
+    logger.info(f"Thresholds: min_duration={min_duration_sec}s, min_size={min_size_mb}MB")
 
     results = {
         "file": video_path,
@@ -324,10 +355,14 @@ def full_episode_audit(episode_dir: str) -> dict:
         "thumbnail": None,
     }
 
-    # Find video file
-    video_files = list(episode_path.glob("*_4K.mp4"))
+    # Find video file (check for both 4K and 1080p patterns)
+    video_files = list(episode_path.glob("*_3840x2160.mp4"))  # 4K
     if not video_files:
-        video_files = list(episode_path.glob("*.mp4"))
+        video_files = list(episode_path.glob("*_1920x1080.mp4"))  # 1080p
+    if not video_files:
+        video_files = list(episode_path.glob("*_4K.mp4"))  # Legacy 4K naming
+    if not video_files:
+        video_files = list(episode_path.glob("*.mp4"))  # Any MP4
 
     if video_files:
         try:
