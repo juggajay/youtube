@@ -204,7 +204,7 @@ def _generate_llm_dialogue(
     stories: List[Story],
 ) -> List[dict]:
     """
-    Generate dialogue using Anthropic Claude API.
+    Generate dialogue using Google Gemini API.
 
     Args:
         vulnerabilities: List of vulnerabilities to discuss
@@ -214,16 +214,16 @@ def _generate_llm_dialogue(
         List of dialogue objects
     """
     try:
-        import anthropic
+        import google.generativeai as genai
     except ImportError:
-        logger.error("anthropic package not installed. Run: pip install anthropic")
+        logger.error("google-generativeai package not installed. Run: pip install google-generativeai")
         return _generate_mock_dialogue(vulnerabilities, stories)
 
     config = get_config()
-    api_key = config.get("env", {}).get("anthropic_api_key")
+    api_key = config.get("env", {}).get("gemini_api_key")
 
     if not api_key:
-        logger.warning("No Anthropic API key found, falling back to mock mode")
+        logger.warning("No Gemini API key found, falling back to mock mode")
         return _generate_mock_dialogue(vulnerabilities, stories)
 
     # Prepare vulnerability data for the prompt
@@ -260,6 +260,9 @@ def _generate_llm_dialogue(
     # Build the user prompt
     user_prompt = _build_content_prompt(vuln_data, story_data)
 
+    # Combine system prompt and user prompt for Gemini
+    full_prompt = f"{SYSTEM_PROMPT}\n\n---\n\n{user_prompt}"
+
     # Retry logic for transient network errors
     import time
     max_retries = 3
@@ -267,25 +270,22 @@ def _generate_llm_dialogue(
 
     for attempt in range(max_retries):
         try:
-            client = anthropic.Anthropic(
-                api_key=api_key,
-                timeout=120.0,  # 2 minute timeout
+            genai.configure(api_key=api_key)
+
+            model = genai.GenerativeModel(
+                model_name="gemini-2.0-flash-exp",
+                generation_config={
+                    "temperature": 0.7,
+                    "max_output_tokens": 8000,
+                }
             )
 
-            logger.info(f"Calling Claude API (attempt {attempt + 1}/{max_retries})...")
+            logger.info(f"Calling Gemini API (attempt {attempt + 1}/{max_retries})...")
 
-            message = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=6000,
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {"role": "user", "content": user_prompt}
-                ]
-            )
+            response = model.generate_content(full_prompt)
+            response_text = response.text
 
-            # Parse the response
-            response_text = message.content[0].text
-            logger.info(f"Claude API success: {len(response_text)} chars")
+            logger.info(f"Gemini API success: {len(response_text)} chars")
 
             # Extract JSON from response
             dialogue = _parse_dialogue_response(response_text)

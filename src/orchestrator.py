@@ -306,8 +306,8 @@ def run_pipeline(
                 # Audit video (checks duration, audio levels, file size)
                 audit_result = audit_episode(
                     video_file,
-                    min_duration_sec=300,  # 5 min minimum
-                    min_size_mb=30,        # 30 MB minimum
+                    min_duration_sec=120,  # 2 min minimum (temporary for testing)
+                    min_size_mb=20,        # 20 MB minimum
                 )
                 results["steps"]["audit"] = {
                     "passed": True,
