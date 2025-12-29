@@ -289,28 +289,97 @@ def generate_youtube_metadata(
     episode_date: str,
     vulnerabilities: list,
     stories: list = None,
+    use_llm: bool = True,
+    audio_manifest: dict = None,
 ) -> dict:
     """
     Generate YouTube title, description, and tags from episode content.
+
+    Uses LLM-based SEO optimization when available, falls back to simple generation.
 
     Args:
         episode_date: Date string (YYYY-MM-DD)
         vulnerabilities: List of Vulnerability objects
         stories: List of Story objects
+        use_llm: Whether to use LLM for metadata generation
+        audio_manifest: Optional audio manifest for chapter markers
 
     Returns:
         Dict with title, description, tags
     """
-    # Parse date for formatting
-    date_obj = datetime.strptime(episode_date, "%Y-%m-%d")
-    date_formatted = date_obj.strftime("%B %d, %Y")  # "January 15, 2025"
-    date_short = date_obj.strftime("%b %d")  # "Jan 15"
+    # Try LLM-based generation first
+    if use_llm:
+        try:
+            from .metadata import generate_youtube_metadata as llm_metadata
+            from .metadata import format_description_for_youtube
 
-    # Count content
+            # Build daily_brief format for the LLM
+            daily_brief = {
+                "date": episode_date,
+                "vulnerabilities": [
+                    {
+                        "cve_id": v.cve_id,
+                        "title": v.title,
+                        "vendor": v.vendor,
+                        "product": v.product,
+                        "cvss_score": v.cvss_score,
+                        "priority": v.priority.value if v.priority else "UNKNOWN",
+                        "description": v.description[:300] if v.description else "",
+                    }
+                    for v in vulnerabilities
+                ],
+                "filter_stats": {
+                    "critical_count": sum(1 for v in vulnerabilities if v.priority and v.priority.value == "CRITICAL"),
+                    "high_count": sum(1 for v in vulnerabilities if v.priority and v.priority.value == "HIGH"),
+                },
+            }
+
+            # Prepare stories for LLM
+            story_data = []
+            if stories:
+                for s in stories[:5]:
+                    story_data.append({
+                        "title": s.title,
+                        "summary": s.summary[:200] if s.summary else "",
+                        "story_type": s.story_type.value if hasattr(s.story_type, 'value') else str(s.story_type),
+                    })
+
+            # Generate metadata with LLM
+            meta = llm_metadata(daily_brief, stories=story_data)
+
+            # Format description with chapters
+            if audio_manifest:
+                meta["description"] = format_description_for_youtube(meta, audio_manifest)
+
+            return {
+                "title": meta.get("primary_title", meta.get("titles", ["Security Brief"])[0])[:100],
+                "description": meta.get("description", "")[:5000],
+                "tags": meta.get("tags", [])[:30],
+            }
+
+        except Exception as e:
+            logger.warning(f"LLM metadata generation failed, using fallback: {e}")
+
+    # Fallback: Simple rule-based generation
+    return _generate_simple_metadata(episode_date, vulnerabilities, stories)
+
+
+def _generate_simple_metadata(
+    episode_date: str,
+    vulnerabilities: list,
+    stories: list = None,
+) -> dict:
+    """
+    Simple rule-based metadata generation (fallback).
+    """
+    date_obj = datetime.strptime(episode_date, "%Y-%m-%d")
+    date_formatted = date_obj.strftime("%B %d, %Y")
+    date_short = date_obj.strftime("%b %d")
+
     critical_count = sum(1 for v in vulnerabilities if v.priority and v.priority.value == "CRITICAL")
     high_count = sum(1 for v in vulnerabilities if v.priority and v.priority.value == "HIGH")
 
-    # Generate title (max 100 chars)
+    # Generate title
     if critical_count > 0:
         title = f"CRITICAL: {critical_count} Urgent Patches | Daily Security Brief {date_short}"
     elif high_count > 0:
@@ -340,6 +409,8 @@ def generate_youtube_metadata(
         "Subscribe for daily cybersecurity updates.",
         "Covering CVEs, patches, breaches, and threat intel.",
         "",
+        "Hosted by AI Analysts Alec & Melody.",
+        "",
         "#cybersecurity #infosec #vulnerabilities #cve #patching",
     ])
 
@@ -351,7 +422,6 @@ def generate_youtube_metadata(
         "patching", "threat intelligence", "daily brief", "security news",
     ]
 
-    # Add vendor-specific tags
     vendors = set(v.vendor.lower() for v in vulnerabilities if v.vendor)
     for vendor in list(vendors)[:5]:
         if vendor and len(vendor) > 2:
@@ -360,7 +430,7 @@ def generate_youtube_metadata(
     return {
         "title": title[:100],
         "description": description[:5000],
-        "tags": tags[:30],  # YouTube limit
+        "tags": tags[:30],
     }
 
 

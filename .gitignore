@@ -56,6 +56,9 @@ Thumbs.db
 *.key
 credentials.json
 token.json
+*.pickle
+data/youtube_token.pickle
+data/client_secrets.json
 
 # Audio/Video files (large)
 *.mp3

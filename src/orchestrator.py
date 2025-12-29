@@ -23,6 +23,7 @@ from .pipeline.filter_score import filter_vulnerabilities, create_daily_brief_pa
 from .pipeline.generate_script import generate_episode_script
 from .pipeline.audio_engine import generate_audio
 from .pipeline.video_assembler import assemble_video
+from .pipeline.thumbnail_generator import generate_thumbnail
 from .dashboard.db_sync import (
     push_vulnerabilities,
     push_episode_script,
@@ -38,6 +39,7 @@ from .publish.youtube import (
 )
 from .publish.rss import update_rss_feed, generate_episode_rss_entry
 from .publish.blog import create_blog_post, generate_blog_content
+from .utils.audit import audit_episode, audit_thumbnail
 
 logger = get_logger(__name__)
 
@@ -264,6 +266,20 @@ def run_pipeline(
             "resolution": video_manifest["resolution"],
         }
 
+        # Generate thumbnail
+        logger.info("Generating thumbnail...")
+        packet_path = output_dir / "daily_brief_packet.json"
+        if packet_path.exists():
+            with open(packet_path) as f:
+                packet_data = json.load(f)
+            thumbnail_manifest = generate_thumbnail(packet_data, str(output_dir))
+            results["steps"]["thumbnail"] = {
+                "file": thumbnail_manifest["thumbnail_file"],
+                "text": thumbnail_manifest["text_overlay"],
+            }
+        else:
+            logger.warning("No daily_brief_packet.json found, skipping thumbnail")
+
     else:
         # Load from previous run
         video_manifest_path = output_dir / "video_manifest.json"
@@ -272,6 +288,43 @@ def run_pipeline(
                 video_manifest = json.load(f)
         else:
             video_manifest = {"video_file": ""}
+
+    # Step 5.5: AUDIT (The Idiot Check)
+    # Validates video/audio before publishing to catch silent audio, black frames, etc.
+    if "video" in steps_to_run or "publish" in steps_to_run:
+        video_file = video_manifest.get("video_file", "")
+        if video_file and Path(video_file).exists():
+            logger.info("=" * 60)
+            logger.info("AUDIT: Pre-publish validation")
+            logger.info("=" * 60)
+
+            try:
+                # Audit video (checks duration, audio levels, file size)
+                audit_result = audit_episode(
+                    video_file,
+                    min_duration_sec=180,  # 3 min minimum
+                    min_size_mb=30,        # 30 MB minimum for our videos
+                )
+                results["steps"]["audit"] = {
+                    "passed": True,
+                    "duration_minutes": audit_result["duration_minutes"],
+                    "size_mb": audit_result["size_mb"],
+                }
+
+                # Audit thumbnail
+                thumbnail_file = output_dir / "thumbnail.png"
+                if thumbnail_file.exists():
+                    thumb_result = audit_thumbnail(str(thumbnail_file))
+                    results["steps"]["audit"]["thumbnail"] = "passed"
+
+            except Exception as e:
+                logger.error(f"AUDIT FAILED: {e}")
+                results["steps"]["audit"] = {"passed": False, "error": str(e)}
+                # Don't proceed to publish if audit fails
+                if "publish" in steps_to_run:
+                    logger.error("Aborting publish due to failed audit")
+                    results["steps"]["publish"] = {"status": "aborted", "reason": str(e)}
+                    return results
 
     # Step 6: Update status
     if "sync" in steps_to_run:
