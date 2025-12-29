@@ -260,28 +260,46 @@ def _generate_llm_dialogue(
     # Build the user prompt
     user_prompt = _build_content_prompt(vuln_data, story_data)
 
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
+    # Retry logic for transient network errors
+    import time
+    max_retries = 3
+    retry_delay = 5  # seconds
 
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=6000,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {"role": "user", "content": user_prompt}
-            ]
-        )
+    for attempt in range(max_retries):
+        try:
+            client = anthropic.Anthropic(
+                api_key=api_key,
+                timeout=120.0,  # 2 minute timeout
+            )
 
-        # Parse the response
-        response_text = message.content[0].text
+            logger.info(f"Calling Claude API (attempt {attempt + 1}/{max_retries})...")
 
-        # Extract JSON from response
-        dialogue = _parse_dialogue_response(response_text)
-        return dialogue
+            message = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=6000,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {"role": "user", "content": user_prompt}
+                ]
+            )
 
-    except Exception as e:
-        logger.error(f"LLM API call failed: {e}")
-        return _generate_mock_dialogue(vulnerabilities, stories)
+            # Parse the response
+            response_text = message.content[0].text
+            logger.info(f"Claude API success: {len(response_text)} chars")
+
+            # Extract JSON from response
+            dialogue = _parse_dialogue_response(response_text)
+            return dialogue
+
+        except Exception as e:
+            logger.warning(f"LLM API attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.error(f"LLM API failed after {max_retries} attempts, using fallback")
+                return _generate_mock_dialogue(vulnerabilities, stories)
 
 
 def _build_content_prompt(vuln_data: List[dict], story_data: List[dict]) -> str:
