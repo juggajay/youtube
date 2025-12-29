@@ -65,30 +65,7 @@ jobs:
     - name: Setup YouTube Refresh Token
       env:
         YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-      run: |
-        if [ -n "$YOUTUBE_REFRESH_TOKEN" ]; then
-          # Create a pickle file from refresh token for the youtube.py module
-          python -c "
-import pickle
-from google.oauth2.credentials import Credentials
-
-# Build credentials from refresh token
-creds = Credentials(
-    token=None,
-    refresh_token='$YOUTUBE_REFRESH_TOKEN',
-    token_uri='https://oauth2.googleapis.com/token',
-    client_id='$(cat data/client_secrets.json | python -c \"import sys,json; print(json.load(sys.stdin)['installed']['client_id'])\")',
-    client_secret='$(cat data/client_secrets.json | python -c \"import sys,json; print(json.load(sys.stdin)['installed']['client_secret'])\")',
-    scopes=['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube']
-)
-
-with open('data/youtube_token.pickle', 'wb') as f:
-    pickle.dump(creds, f)
-print('YouTube token pickle created')
-"
-        else
-          echo "Warning: No YouTube refresh token configured"
-        fi
+      run: python scripts/setup_youtube_token.py
 
     # --- EXECUTION PHASE ---
     - name: Run Orchestrator
