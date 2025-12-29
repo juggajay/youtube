@@ -99,6 +99,62 @@ def render_text(image: Image.Image, text: str, color: str, font_path: str) -> Im
     return image
 
 
+# --- KEYWORD EXTRACTION ---
+
+# Keywords to look for in title/description when vendor field is empty
+KEYWORD_MAP = {
+    # Infrastructure
+    "MAIL SERVER": "MAIL SERVER",
+    "EMAIL SERVER": "EMAIL",
+    "WEB SERVER": "WEB SERVER",
+    "FILE TRANSFER": "FILE TRANSFER",
+    "FILE UPLOAD": "FILE UPLOAD",
+    # Products
+    "WORDPRESS": "WORDPRESS",
+    "APACHE": "APACHE",
+    "NGINX": "NGINX",
+    "TOMCAT": "TOMCAT",
+    "EXCHANGE": "EXCHANGE",
+    "SHAREPOINT": "SHAREPOINT",
+    "ORACLE": "ORACLE",
+    "VMWARE": "VMWARE",
+    "CITRIX": "CITRIX",
+    "FORTINET": "FORTINET",
+    "PALO ALTO": "PALO ALTO",
+    "CISCO": "CISCO",
+    "JUNIPER": "JUNIPER",
+    "IVANTI": "IVANTI",
+    "MONGODB": "MONGODB",
+    "MYSQL": "MYSQL",
+    "POSTGRESQL": "POSTGRESQL",
+    "REDIS": "REDIS",
+    "KUBERNETES": "KUBERNETES",
+    "DOCKER": "DOCKER",
+    # Attack types (fallback)
+    "REMOTE CODE EXECUTION": "RCE",
+    "SQL INJECTION": "SQL INJECTION",
+    "AUTHENTICATION BYPASS": "AUTH BYPASS",
+    "PRIVILEGE ESCALATION": "PRIV ESC",
+}
+
+
+def _extract_keyword_from_text(text: str) -> str:
+    """Extract a recognizable keyword from title/description."""
+    text_upper = text.upper()
+
+    # Check Tier-1 vendors first
+    for vendor in TIER_1_VENDORS:
+        if vendor in text_upper:
+            return vendor
+
+    # Check keyword map
+    for keyword, display in KEYWORD_MAP.items():
+        if keyword in text_upper:
+            return display
+
+    return ""
+
+
 # --- PRIORITY LOGIC ---
 
 def determine_text(daily_brief: dict) -> tuple:
@@ -107,12 +163,13 @@ def determine_text(daily_brief: dict) -> tuple:
 
     Logic:
     1. Find highest severity CVE and extract vendor name
-    2. Combine vendor + severity for actionable headline
+    2. If vendor empty, try to extract from title/description
     3. Fall back to top news story if no CVEs
     4. "DAILY INTEL" for quiet days
 
     Examples:
     - "MONGODB CRITICAL" (red)
+    - "MAIL SERVER CRITICAL" (red)
     - "CISCO HIGH RISK" (yellow)
     - "CONDE NAST BREACH" (red)
     - "DAILY INTEL" (cyan)
@@ -143,6 +200,12 @@ def determine_text(daily_brief: dict) -> tuple:
             if t1 in vendor or t1 in product:
                 name = t1
                 break
+
+        # If still no name, try to extract from title/description
+        if not name:
+            title = top_vuln.get("title", "")
+            description = top_vuln.get("description", "")
+            name = _extract_keyword_from_text(title + " " + description)
 
         if name:
             # Determine severity label
