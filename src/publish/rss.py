@@ -314,11 +314,12 @@ def _format_rfc822(dt: datetime) -> str:
     return dt.strftime("%a, %d %b %Y %H:%M:%S +0000")
 
 
-def _format_duration(seconds: int) -> str:
+def _format_duration(seconds: float) -> str:
     """Format duration as HH:MM:SS."""
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    secs = seconds % 60
+    total_secs = int(seconds)  # Convert float to int
+    hours = total_secs // 3600
+    minutes = (total_secs % 3600) // 60
+    secs = total_secs % 60
 
     if hours > 0:
         return f"{hours}:{minutes:02d}:{secs:02d}"
