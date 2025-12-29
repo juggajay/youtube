@@ -421,8 +421,9 @@ def generate_episode_script(
         speaker = line["speaker"].lower()
         voice = voice_config.get(speaker, {})
 
-        # Apply pronunciation fixes for better TTS output
-        fixed_text = apply_pronunciation_fixes(line["text"])
+        # ElevenLabs V3 handles pronunciation well - no transforms needed
+        # (Previously applied apply_pronunciation_fixes() but it caused issues
+        # like "mail" -> "mA Il" due to short patterns matching inside words)
 
         enriched_dialogue.append({
             "index": i,
@@ -430,8 +431,8 @@ def generate_episode_script(
             "voice_id": voice.get("voice_id", ""),
             "seed": voice.get("seed", 0),
             "chunk_type": "spoken",
-            "text": fixed_text,
-            "original_text": line["text"],  # Keep original for reference
+            "text": line["text"],  # Raw text - V3 handles acronyms correctly
+            "original_text": line["text"],
             "cve_refs": line.get("cve_refs", []),
             "story_refs": line.get("story_refs", []),
             "tags": _extract_tags(line["text"]),
