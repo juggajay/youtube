@@ -184,6 +184,52 @@ PRONUNCIATION_FIXES = {
     "MongoDB": "Mongo D B",
     "ZSpace": "Z Space",
     "Wired": "Wired",
+
+    # =============================================================================
+    # CRITICAL FIXES FROM TRANSCRIPT ANALYSIS (Dec 29 Episode)
+    # =============================================================================
+    "ML Server": "Mail Server",
+    "ML server": "Mail Server",
+    "ML": "Machine Learning",
+    "Welltend": "Well-tend",
+    "Wellend": "Well-tend",
+    "Innorix": "In-no-rix",
+    "Gmission": "G-Mission",
+    "G-Mission": "G Mission",
+    "Moga-Mall": "Moga Mall",
+    "MogaMall": "Moga Mall",
+    "Mirai": "Mee-rye",
+    "botnet": "bot-net",
+    "Botnet": "Bot-net",
+    "SetIpBind": "Set I P Bind",
+    "setIpBind": "set I P bind",
+    "Oltenia": "Ol-ten-ee-ah",
+    "Gentleman Ransomware": "Ransomware",
+    "gentleman ransomware": "ransomware",
+    "PI of": "pair of",
+    "a PI": "a pair",
+
+    # Common function/variable name patterns
+    "GetIP": "Get I P",
+    "SetIP": "Set I P",
+    "IPAddr": "I P Address",
+    "IPAddress": "I P Address",
+
+    # Ransomware groups (prevent mispronunciation)
+    "Qilin": "Chee-lin",
+    "LockBit": "Lock Bit",
+    "BlackCat": "Black Cat",
+    "ALPHV": "Alpha V",
+    "Cl0p": "Clop",
+    "Clop": "Clop",
+    "Akira": "Ah-kee-rah",
+    "Rhysida": "Rye-see-dah",
+    "Play": "Play",
+    "RansomHub": "Ransom Hub",
+    "Medusa": "Meh-doo-sah",
+    "BianLian": "Bee-an Lee-an",
+    "NoEscape": "No Escape",
+    "8Base": "Eight Base",
 }
 
 
@@ -303,6 +349,16 @@ GOOD Melody:
 - "Attackers can take over your server" not "remote code execution"
 - "About as bad as it gets" not "CVSS 9.8"
 - "Being exploited right now" not "active exploitation observed"
+
+**CRITICAL TTS WRITING RULES (Prevent mispronunciation):**
+- NEVER abbreviate "Mail Server" as "ML Server" - write "Mail Server"
+- NEVER write "PI" when you mean "pair" - write "pair of scores"
+- NEVER write "seconds" for CVSS scores - write "points" or "out of ten"
+- If you see a function name like "SetIpBind", write "Set IP Bind" with spaces
+- Write "Mirai botnet" clearly - NEVER "Mera" or similar
+- Write brand names carefully: "Welltend" not "Wellend", "Innorix" not "Inex"
+- If unsure how to pronounce a name, describe it instead ("the Romanian energy company")
+- NEVER invent ransomware group names - use only known groups (LockBit, Qilin, BlackCat, Clop, Akira, Rhysida, Play, Medusa, RansomHub)
 
 ## AUDIO EXPRESSION (V3 TTS)
 
