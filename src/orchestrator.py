@@ -21,7 +21,7 @@ from .ingest.models import Vulnerability, Story
 from .ingest.news import fetch_news_stories, fetch_reddit_security, deduplicate_stories, generate_mock_stories
 from .pipeline.filter_score import filter_vulnerabilities, create_daily_brief_packet
 from .pipeline.generate_script import generate_episode_script
-from .pipeline.script_validator import validate_script
+from .pipeline.script_validator import validate_and_fix
 from .pipeline.audio_engine import generate_audio
 from .pipeline.video_assembler import assemble_video
 from .pipeline.thumbnail_generator import generate_thumbnail
@@ -248,11 +248,12 @@ def run_pipeline(
             with open(daily_brief_path) as f:
                 input_data = json.load(f)
 
-        validation_passed, validation_report = validate_script(
+        # Validate and fix in a loop
+        script, validation_passed, validation_report = validate_and_fix(
             script,
             input_data=input_data,
-            use_llm=True,
-            fail_on_high=False  # Warn but don't block for now
+            max_attempts=2,
+            use_llm=True
         )
 
         results["steps"]["validation"] = {
@@ -260,6 +261,7 @@ def run_pipeline(
             "total_issues": validation_report["total_issues"],
             "high_severity": validation_report["high_severity_count"],
             "medium_severity": validation_report["medium_severity_count"],
+            "fix_attempts": validation_report.get("attempts", 1),
         }
 
         # Save validation report
@@ -267,8 +269,16 @@ def run_pipeline(
         with open(report_path, "w") as f:
             json.dump(validation_report, f, indent=2)
 
-        if validation_report["high_severity_count"] > 0:
-            logger.warning(f"⚠️  {validation_report['high_severity_count']} high-severity issues found - review validation_report.json")
+        # If script was fixed, save the corrected version
+        if validation_report.get("fixed_issues", 0) > 0 or validation_report.get("attempts", 1) > 1:
+            logger.info("💾 Saving corrected script...")
+            script_path = output_dir / "episode_script.json"
+            with open(script_path, "w") as f:
+                json.dump(script, f, indent=2)
+            logger.info(f"Corrected script saved to {script_path}")
+
+        if not validation_passed and validation_report["high_severity_count"] > 0:
+            logger.warning(f"⚠️  {validation_report['high_severity_count']} high-severity issues remain after {validation_report.get('attempts', 1)} fix attempts")
 
     # Step 4: Generate audio
     if "audio" in steps_to_run:

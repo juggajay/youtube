@@ -327,6 +327,172 @@ def run_llm_validation(script: dict) -> Dict:
 
 
 # =============================================================================
+# SCRIPT FIXER - LLM-based correction
+# =============================================================================
+
+FIX_SCRIPT_PROMPT = """You are a script editor fixing errors in a cybersecurity podcast script.
+
+ISSUES FOUND:
+{issues}
+
+ORIGINAL SCRIPT:
+{script}
+
+TASK:
+Fix ALL the issues listed above. Return the COMPLETE corrected script.
+
+RULES:
+1. Fix hallucinations by removing or replacing with accurate info
+2. Fix spelling errors with correct spelling
+3. Fix made-up ransomware groups - use real names (LockBit, Qilin, BlackCat, Clop, Akira) or remove the reference
+4. Fix CVE format issues
+5. Keep the same dialogue structure (speaker, text format)
+6. DO NOT add new content - only fix errors
+7. Preserve the natural conversational tone
+
+OUTPUT FORMAT (JSON array only, no markdown):
+[
+  {{"speaker": "Alec", "text": "corrected text here", "cve_refs": [], "story_refs": []}},
+  {{"speaker": "Melody", "text": "corrected text here", "cve_refs": [], "story_refs": []}}
+]
+"""
+
+
+def fix_script_issues(script: dict, issues: list) -> dict:
+    """
+    Send script and issues to LLM to get corrected version.
+
+    Args:
+        script: Original script with errors
+        issues: List of issues from validation
+
+    Returns:
+        Corrected script dict
+    """
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        logger.error("google-generativeai not installed, cannot fix script")
+        return script
+
+    config = get_config()
+    api_key = config.get("env", {}).get("gemini_api_key")
+
+    if not api_key:
+        logger.error("No Gemini API key, cannot fix script")
+        return script
+
+    # Format issues for prompt
+    issues_text = "\n".join([
+        f"- [{issue.get('severity', 'unknown').upper()}] {issue.get('type', 'unknown')}: {issue.get('message', issue.get('explanation', 'No details'))}"
+        for issue in issues
+    ])
+
+    # Format script for prompt
+    script_text = json.dumps(script.get("dialogue", []), indent=2)
+
+    prompt = FIX_SCRIPT_PROMPT.format(issues=issues_text, script=script_text)
+
+    try:
+        genai.configure(api_key=api_key)
+
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            generation_config={
+                "temperature": 0.3,
+                "max_output_tokens": 8000,
+            }
+        )
+
+        logger.info("Sending script to LLM for fixes...")
+        response = model.generate_content(prompt)
+
+        response_text = response.text.strip()
+
+        # Clean up markdown if present
+        if response_text.startswith("```"):
+            response_text = re.sub(r'^```json?\n?', '', response_text)
+            response_text = re.sub(r'\n?```$', '', response_text)
+
+        fixed_dialogue = json.loads(response_text)
+
+        # Rebuild script with fixed dialogue
+        fixed_script = script.copy()
+        fixed_script["dialogue"] = fixed_dialogue
+        fixed_script["fixed_issues"] = len(issues)
+
+        logger.info(f"Script fixed: {len(issues)} issues addressed")
+        return fixed_script
+
+    except Exception as e:
+        logger.error(f"Failed to fix script: {e}")
+        return script
+
+
+def validate_and_fix(
+    script: dict,
+    input_data: dict = None,
+    max_attempts: int = 2,
+    use_llm: bool = True
+) -> Tuple[dict, bool, Dict]:
+    """
+    Validate script and fix issues in a loop.
+
+    Args:
+        script: Original script
+        input_data: Daily brief for cross-checking
+        max_attempts: Max fix attempts before giving up
+        use_llm: Whether to use LLM validation
+
+    Returns:
+        Tuple of (final_script, passed, report)
+    """
+    current_script = script
+    attempt = 0
+    all_reports = []
+
+    while attempt < max_attempts:
+        attempt += 1
+        logger.info(f"Validation attempt {attempt}/{max_attempts}")
+
+        # Validate
+        passed, report = validate_script(
+            current_script,
+            input_data=input_data,
+            use_llm=use_llm,
+            fail_on_high=True
+        )
+        all_reports.append(report)
+
+        if passed or report["high_severity_count"] == 0:
+            logger.info(f"✅ Script passed validation on attempt {attempt}")
+            report["attempts"] = attempt
+            return current_script, True, report
+
+        # Collect all issues to fix
+        all_issues = report["rule_based_issues"] + report["llm_issues"]
+        high_issues = [i for i in all_issues if i.get("severity") == "high"]
+
+        if not high_issues:
+            logger.info("No high-severity issues to fix")
+            report["attempts"] = attempt
+            return current_script, True, report
+
+        logger.info(f"🔧 Fixing {len(high_issues)} high-severity issues...")
+
+        # Fix the script
+        current_script = fix_script_issues(current_script, high_issues)
+
+    # Max attempts reached
+    logger.warning(f"⚠️ Max attempts ({max_attempts}) reached, proceeding with warnings")
+    final_report = all_reports[-1]
+    final_report["attempts"] = attempt
+    final_report["max_attempts_reached"] = True
+
+    return current_script, False, final_report
+
+
+# =============================================================================
 # MAIN VALIDATOR
 # =============================================================================
 
