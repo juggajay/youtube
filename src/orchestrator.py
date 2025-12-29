@@ -21,6 +21,7 @@ from .ingest.models import Vulnerability, Story
 from .ingest.news import fetch_news_stories, fetch_reddit_security, deduplicate_stories, generate_mock_stories
 from .pipeline.filter_score import filter_vulnerabilities, create_daily_brief_packet
 from .pipeline.generate_script import generate_episode_script
+from .pipeline.script_validator import validate_script
 from .pipeline.audio_engine import generate_audio
 from .pipeline.video_assembler import assemble_video
 from .pipeline.thumbnail_generator import generate_thumbnail
@@ -233,6 +234,41 @@ def run_pipeline(
         else:
             logger.error("No script found. Run script step first.")
             return results
+
+    # Step 3.5: Validate script before audio (saves ElevenLabs credits)
+    if "audio" in steps_to_run and script and not mock:
+        logger.info("=" * 60)
+        logger.info("STEP 3.5: Validating script (pre-flight check)")
+        logger.info("=" * 60)
+
+        # Load daily brief for cross-checking
+        daily_brief_path = output_dir / "daily_brief_packet.json"
+        input_data = None
+        if daily_brief_path.exists():
+            with open(daily_brief_path) as f:
+                input_data = json.load(f)
+
+        validation_passed, validation_report = validate_script(
+            script,
+            input_data=input_data,
+            use_llm=True,
+            fail_on_high=False  # Warn but don't block for now
+        )
+
+        results["steps"]["validation"] = {
+            "passed": validation_passed,
+            "total_issues": validation_report["total_issues"],
+            "high_severity": validation_report["high_severity_count"],
+            "medium_severity": validation_report["medium_severity_count"],
+        }
+
+        # Save validation report
+        report_path = output_dir / "validation_report.json"
+        with open(report_path, "w") as f:
+            json.dump(validation_report, f, indent=2)
+
+        if validation_report["high_severity_count"] > 0:
+            logger.warning(f"⚠️  {validation_report['high_severity_count']} high-severity issues found - review validation_report.json")
 
     # Step 4: Generate audio
     if "audio" in steps_to_run:
