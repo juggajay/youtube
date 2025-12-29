@@ -47,16 +47,42 @@ CLIENT_SECRETS_PATH = Path("data/client_secrets.json")
 
 
 def is_youtube_authenticated() -> bool:
-    """Check if we have valid YouTube credentials."""
+    """Check if we have valid or refreshable YouTube credentials."""
     if not TOKEN_PATH.exists():
         return False
 
     try:
         with open(TOKEN_PATH, "rb") as f:
             creds = pickle.load(f)
-        return creds and creds.valid
+        # Valid if token is valid OR if we have a refresh token
+        return creds and (creds.valid or creds.refresh_token)
     except Exception:
         return False
+
+
+def _get_youtube_credentials():
+    """Get YouTube credentials, refreshing if necessary."""
+    from google.auth.transport.requests import Request
+
+    if not TOKEN_PATH.exists():
+        return None
+
+    with open(TOKEN_PATH, "rb") as f:
+        creds = pickle.load(f)
+
+    # Refresh if expired
+    if creds and not creds.valid and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            # Save refreshed token
+            with open(TOKEN_PATH, "wb") as f:
+                pickle.dump(creds, f)
+            logger.info("YouTube token refreshed successfully")
+        except Exception as e:
+            logger.error(f"Failed to refresh token: {e}")
+            return None
+
+    return creds
 
 
 def authenticate_youtube(client_secrets_path: str = None) -> bool:
@@ -120,21 +146,12 @@ def _get_youtube_service():
     """Get authenticated YouTube API service."""
     try:
         from googleapiclient.discovery import build
-        from google.auth.transport.requests import Request
     except ImportError:
         raise ImportError("Install: pip install google-api-python-client google-auth-oauthlib")
 
-    if not TOKEN_PATH.exists():
+    creds = _get_youtube_credentials()
+    if not creds:
         raise RuntimeError("Not authenticated. Run authenticate_youtube() first.")
-
-    with open(TOKEN_PATH, "rb") as f:
-        creds = pickle.load(f)
-
-    # Refresh if expired
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        with open(TOKEN_PATH, "wb") as f:
-            pickle.dump(creds, f)
 
     return build("youtube", "v3", credentials=creds)
 
