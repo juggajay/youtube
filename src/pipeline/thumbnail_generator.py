@@ -1,18 +1,23 @@
 """
 Thumbnail Generator - Creates click-optimized YouTube thumbnails.
 
-Uses dynamic text overlays based on episode severity:
-- Priority 1: Tier-1 vendor -> "PATCH [VENDOR]" (red)
-- Priority 2: Critical count -> "[X] CRITICAL" (red)
-- Priority 3: High count -> "[X] HIGH RISK" (yellow)
+Uses dynamic text overlays based on highest-impact content:
+- Compares vulnerability scores (vendor tier + CVSS) vs story impact scores
+- Priority 1: Highest scoring item (vuln or story) wins
+- Priority 2: Critical count fallback -> "[X] CRITICAL" (red)
+- Priority 3: High count fallback -> "[X] HIGH RISK" (yellow)
 - Priority 4: Quiet day -> "DAILY INTEL" (cyan)
 """
 
 import os
+import re
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageDraw, ImageFont, ImageOps
 
 from ..utils import get_logger
+from ..ingest.story_scoring import calculate_impact_score
+from ..ingest.models import Story, StoryType
+from .vendor_tiers import get_vendor_tier, get_tier_weight, TIER_1
 
 logger = get_logger(__name__)
 
@@ -155,84 +160,219 @@ def _extract_keyword_from_text(text: str) -> str:
     return ""
 
 
+# --- SCORING HELPERS ---
+
+def _calculate_vuln_score(vuln: dict) -> float:
+    """
+    Calculate a comparable score for a vulnerability.
+
+    Factors:
+    - CVSS score (0-10, scaled to 0-100)
+    - Vendor tier weight multiplier
+
+    Returns:
+        Score 0-100
+    """
+    cvss = vuln.get("cvss_score", 0)
+    vendor = vuln.get("vendor", "")
+    product = vuln.get("product", "")
+
+    # Get vendor tier (check both vendor and product)
+    tier = get_vendor_tier(vendor)
+    if tier == 4:  # Unknown vendor, try product
+        tier = get_vendor_tier(product)
+
+    tier_weight = get_tier_weight(tier)
+
+    # Scale CVSS to 0-100 and apply tier weight
+    base_score = cvss * 10
+    return base_score * tier_weight
+
+
+def _story_dict_to_model(story_dict: dict) -> Story:
+    """Convert a story dict to a Story model for scoring."""
+    story_type_str = story_dict.get("story_type", "general")
+    try:
+        story_type = StoryType(story_type_str)
+    except ValueError:
+        story_type = StoryType.GENERAL
+
+    return Story(
+        id=story_dict.get("id", "thumbnail-temp"),
+        title=story_dict.get("title", ""),
+        summary=story_dict.get("summary", ""),
+        story_type=story_type,
+    )
+
+
+def _extract_dollar_amount(text: str) -> str:
+    """Extract dollar amount from text for display."""
+    # Look for patterns like "$8.5 Million", "$50M", "$2 Billion"
+    patterns = [
+        r'(\$\d+(?:\.\d+)?\s*(?:BILLION|B\b))',
+        r'(\$\d+(?:\.\d+)?\s*(?:MILLION|M\b))',
+        r'(\$\d+(?:\.\d+)?(?:\s*(?:MILLION|BILLION|M|B))?)',
+    ]
+    text_upper = text.upper()
+    for pattern in patterns:
+        match = re.search(pattern, text_upper)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _format_story_text(story_dict: dict) -> str:
+    """Format story into compelling thumbnail text."""
+    title = story_dict.get("title", "")
+    title_upper = title.upper()
+
+    # Priority 1: Include dollar amounts
+    dollar_amount = _extract_dollar_amount(title)
+    if dollar_amount:
+        # Try to extract company/entity name
+        words = title.split()
+        entity = ""
+        for word in words:
+            clean_word = word.upper().strip(",:;")
+            if clean_word and not clean_word.startswith("$") and clean_word not in [
+                "LOSES", "LOST", "STOLEN", "HACK", "BREACH", "ATTACK", "IN", "THE", "A"
+            ]:
+                entity = clean_word
+                break
+        if entity:
+            return f"{entity} {dollar_amount}"
+        return f"{dollar_amount} BREACH"
+
+    # Priority 2: Check for Tier 1 vendor mentions
+    for vendor in TIER_1:
+        if vendor in title_upper:
+            story_type = story_dict.get("story_type", "")
+            suffix = "BREACH" if story_type == "breach" else "ALERT"
+            return f"{vendor} {suffix}"
+
+    # Priority 3: Nation-state/APT
+    apt_patterns = [
+        (r'(CHINA)[\s-]?(?:LINKED|NEXUS|BACKED)', 'CHINA-LINKED'),
+        (r'(RUSSIA)[\s-]?(?:LINKED|NEXUS|BACKED)', 'RUSSIA-LINKED'),
+        (r'(IRAN)[\s-]?(?:LINKED|NEXUS|BACKED)', 'IRAN-LINKED'),
+        (r'(APT\d+)', None),  # Use matched group directly
+        (r'(VOLT\s*TYPHOON|FANCY\s*BEAR|LAZARUS)', None),
+    ]
+    for pattern, replacement in apt_patterns:
+        match = re.search(pattern, title_upper)
+        if match:
+            apt_name = replacement if replacement else match.group(1)
+            return f"{apt_name} THREAT"
+
+    # Priority 4: Ransomware
+    if "RANSOMWARE" in title_upper:
+        return "RANSOMWARE ALERT"
+
+    # Priority 5: Generic breach/hack
+    if "BREACH" in title_upper or "HACK" in title_upper or "STOLEN" in title_upper:
+        words = title.split()[:2]
+        company = " ".join(words).upper().replace(":", "").replace(",", "")
+        return f"{company} BREACH"
+
+    # Fallback: First few words
+    words = title.split()[:3]
+    return " ".join(words).upper()
+
+
+def _format_vuln_text(vuln: dict) -> tuple:
+    """
+    Format vulnerability into thumbnail text with color.
+
+    Returns:
+        (text, hex_color)
+    """
+    vendor = vuln.get("vendor", "").upper().strip()
+    product = vuln.get("product", "").upper().strip()
+    cvss = vuln.get("cvss_score", 0)
+
+    # Prefer vendor, fall back to product
+    name = vendor if vendor else product
+
+    # Check for Tier-1 vendor match (use full name)
+    for t1 in TIER_1_VENDORS:
+        if t1 in vendor or t1 in product:
+            name = t1
+            break
+
+    # If still no name, try to extract from title/description
+    if not name:
+        title = vuln.get("title", "")
+        description = vuln.get("description", "")
+        name = _extract_keyword_from_text(title + " " + description)
+
+    if not name:
+        name = "VULNERABILITY"
+
+    # Determine severity label and color
+    if cvss >= 9.0:
+        return f"{name} CRITICAL", "#FF0000"
+    elif cvss >= 7.0:
+        return f"{name} HIGH RISK", "#FFD700"
+    else:
+        return f"{name} ALERT", "#FFA500"
+
+
 # --- PRIORITY LOGIC ---
 
 def determine_text(daily_brief: dict) -> tuple:
     """
-    Returns (text, hex_color) based on top threat.
+    Returns (text, hex_color) based on highest-impact content.
 
     Logic:
-    1. Find highest severity CVE and extract vendor name
-    2. If vendor empty, try to extract from title/description
-    3. Fall back to top news story if no CVEs
-    4. "DAILY INTEL" for quiet days
+    1. Score all vulnerabilities (CVSS * tier_weight)
+    2. Score all stories using calculate_impact_score
+    3. Compare highest vuln score vs highest story score
+    4. Winner determines the thumbnail text
+    5. Fall back to counts or "DAILY INTEL" if nothing compelling
 
     Examples:
-    - "MONGODB CRITICAL" (red)
-    - "MAIL SERVER CRITICAL" (red)
-    - "CISCO HIGH RISK" (yellow)
-    - "CONDE NAST BREACH" (red)
-    - "DAILY INTEL" (cyan)
+    - "$8.5M BREACH" (red) - high-impact story
+    - "MICROSOFT CRITICAL" (red) - Tier 1 critical vuln
+    - "CHINA-LINKED THREAT" (red) - APT story
+    - "5 CRITICAL" (red) - fallback to counts
+    - "DAILY INTEL" (cyan) - quiet day
     """
     vulns = daily_brief.get("vulnerabilities", [])
     stories = daily_brief.get("top_stories", [])
 
-    # --- Priority 1: Find top CVE by severity ---
-    if vulns:
-        # Sort by CVSS score descending
-        sorted_vulns = sorted(
-            vulns,
-            key=lambda v: v.get("cvss_score", 0),
-            reverse=True
-        )
-        top_vuln = sorted_vulns[0]
-        cvss = top_vuln.get("cvss_score", 0)
+    best_vuln_score = 0
+    best_vuln = None
+    best_story_score = 0
+    best_story = None
 
-        # Extract vendor name (clean it up)
-        vendor = top_vuln.get("vendor", "").upper().strip()
-        product = top_vuln.get("product", "").upper().strip()
+    # --- Score vulnerabilities ---
+    for vuln in vulns:
+        score = _calculate_vuln_score(vuln)
+        if score > best_vuln_score:
+            best_vuln_score = score
+            best_vuln = vuln
 
-        # Prefer vendor, fall back to product
-        name = vendor if vendor else product
+    # --- Score stories ---
+    for story_dict in stories:
+        if not isinstance(story_dict, dict):
+            continue
+        story_model = _story_dict_to_model(story_dict)
+        score = calculate_impact_score(story_model)
+        if score > best_story_score:
+            best_story_score = score
+            best_story = story_dict
 
-        # Check for Tier-1 vendor match (use full name)
-        for t1 in TIER_1_VENDORS:
-            if t1 in vendor or t1 in product:
-                name = t1
-                break
+    # --- Compare and pick winner ---
+    if best_vuln_score > 0 or best_story_score > 0:
+        if best_vuln_score >= best_story_score and best_vuln:
+            # Vulnerability wins
+            return _format_vuln_text(best_vuln)
+        elif best_story:
+            # Story wins
+            text = _format_story_text(best_story)
+            return text, "#FF0000"  # Stories are always red (high urgency)
 
-        # If still no name, try to extract from title/description
-        if not name:
-            title = top_vuln.get("title", "")
-            description = top_vuln.get("description", "")
-            name = _extract_keyword_from_text(title + " " + description)
-
-        if name:
-            # Determine severity label
-            if cvss >= 9.0:
-                return f"{name} CRITICAL", "#FF0000"
-            elif cvss >= 7.0:
-                return f"{name} HIGH RISK", "#FFD700"
-            else:
-                return f"{name} ALERT", "#FFA500"
-
-    # --- Priority 2: Check for breach/news stories ---
-    if stories:
-        top_story = stories[0] if isinstance(stories[0], dict) else {"title": str(stories[0])}
-        title = top_story.get("title", "").upper()
-
-        # Check for breach keywords
-        if "BREACH" in title or "HACK" in title or "LEAK" in title or "STOLEN" in title:
-            # Try to extract company name (first 1-2 words usually)
-            words = title.split()[:2]
-            company = " ".join(words).replace(":", "").replace(",", "")
-            return f"{company} BREACH", "#FF0000"
-
-        # Check for ransomware
-        if "RANSOMWARE" in title:
-            return "RANSOMWARE ALERT", "#FF0000"
-
-    # --- Priority 3: Fall back to counts if we have them ---
+    # --- Fallback: counts ---
     stats = daily_brief.get("filter_stats", {})
     critical_count = stats.get("critical_count", 0)
     high_count = stats.get("high_count", 0)
@@ -242,7 +382,7 @@ def determine_text(daily_brief: dict) -> tuple:
     if high_count > 0:
         return f"{high_count} HIGH RISK", "#FFD700"
 
-    # --- Priority 4: Quiet day ---
+    # --- Quiet day ---
     return "DAILY INTEL", "#00FFFF"
 
 
