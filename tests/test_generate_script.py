@@ -13,11 +13,10 @@ class TestSystemPromptContent:
         assert "year" in SYSTEM_PROMPT.lower()
         # Should mention handling old CVE years
         assert any(phrase in SYSTEM_PROMPT.lower() for phrase in [
-            "old-looking year",
-            "year discrepancy",
             "backdated",
             "just hit the nvd",
             "disclosure queue",
+            "2+ years",
         ])
 
     def test_prompt_includes_example_year_explanations(self):
