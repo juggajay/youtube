@@ -1,0 +1,167 @@
+Development Brief: Automated Cybersecurity Video Pipeline Fixes
+Project Context
+This is an automated daily cybersecurity news video pipeline that ingests CVEs from NVD, filters them, generates a two-host podcast script via LLM, converts to audio via ElevenLabs, assembles video, and publishes to YouTube. The pipeline runs daily at 7am with no human review.
+The system works technically but has content quality issues that damage channel credibility. The core problem is that the filtering treats all vulnerabilities equally regardless of how many people they affect, and the script generation doesn't provide context that viewers need to understand what they're hearing.
+
+Issue 1: No Audience Relevance Weighting in Vulnerability Filtering
+File: filter_score.py
+Current Behavior:
+The priority matrix filters vulnerabilities based purely on severity scores. A vulnerability passes if it meets CVSS and EPSS thresholds, regardless of what product it affects. The logic is:
+
+CISA KEV listed → CRITICAL
+CVSS above 9.0 AND EPSS above 0.10 → CRITICAL
+CVSS above 7.0 AND EPSS above 0.30 → HIGH
+Everything else → FILTERED
+
+The Problem:
+A critical vulnerability in Sound4 broadcast audio processors (used by maybe 500 radio stations worldwide) gets the same priority as a critical vulnerability in Microsoft Windows (used by over a billion devices). This results in episodes filled with obscure products that viewers have never heard of and will never encounter, while genuinely important vulnerabilities get equal or less airtime.
+Real example from recent episode: The pipeline gave equal weight to vulnerabilities in "Akuvox Smart Intercom S539", "TinyControl LAN Controller", "MiniDVBLinux", and "QNO VPN firewalls" alongside Trust Wallet (millions of crypto users) and React Server Components (40% of web developers use React).
+The Fix:
+Add a vendor/product relevance tier system that acts as a multiplier on the filtering decision. The concept already exists in thumbnail_generator.py as TIER_1_VENDORS but it only affects thumbnail text, not filtering.
+Create a tiered vendor weighting system:
+
+Tier 1 (weight 1.0): Massive install base products that most viewers either use or their employers use. Microsoft, Apple, Google, Amazon/AWS, Cisco, Linux kernel, Android, iOS, Chrome, Firefox, major cloud providers.
+Tier 2 (weight 0.8): Enterprise security and infrastructure products that IT professionals know. Ivanti, Fortinet, Palo Alto, VMware, Citrix, F5, Juniper, CrowdStrike, major databases like Oracle/PostgreSQL/MongoDB.
+Tier 3 (weight 0.6): Common but narrower audience. WordPress, Apache, Nginx, popular open source tools, developer frameworks like React/Node/Django.
+Tier 4 (weight 0.3): Unknown or niche vendors. This is the default for anything not in the above tiers.
+
+The effective priority calculation should factor in this weight. A Tier 4 vendor should need significantly higher severity scores to make the cut compared to a Tier 1 vendor. For example, a CVSS 8.0 vulnerability in Microsoft Exchange is more newsworthy than a CVSS 9.5 vulnerability in an obscure industrial controller that maybe 200 companies worldwide use.
+The CISA KEV rule should remain absolute (if it's being actively exploited, it matters regardless of vendor) but the CVSS/EPSS threshold rules should incorporate vendor weight.
+Also add logging that shows why a vulnerability was included or excluded, including the vendor tier that was applied, so you can tune the weights over time based on what's actually making it into episodes.
+
+Issue 2: CVE Year Numbers Sound Like Old News Without Context
+File: generate_script.py (specifically the SYSTEM_PROMPT)
+Current Behavior:
+The script generation prompt tells the LLM to use exact CVE IDs from the input data, which is correct. However, it doesn't instruct the LLM to explain why a CVE with an old-looking year is actually news today.
+The Problem:
+NVD assigns CVE ID numbers when a vulnerability is first reported to them, which can be years before public disclosure. A vulnerability discovered in 2022 might not be published to NVD until late 2024 or 2025. The pipeline correctly fetches these by modification date (when they were actually published), but viewers hear "CVE-2022-50794" and think "why are they talking about a three-year-old vulnerability?"
+This makes the channel sound like it's reporting stale news when it's actually reporting newly disclosed vulnerabilities. It's confusing and damages credibility.
+The Fix:
+Add a new section to the SYSTEM_PROMPT that instructs the LLM on how to handle CVE year discrepancies. When a CVE year doesn't match the current year (or previous year), the script should briefly acknowledge this and explain why it's news now.
+Examples of how the hosts should handle this:
+
+"CVE-2022-50794 - and yes, that's a 2022 ID, but it just hit the NVD database yesterday"
+"This one's been in the disclosure queue for a while - vendors sometimes take years to coordinate patches before going public"
+"Don't let the 2022 date fool you - this is fresh intel, just published"
+
+The key is making it conversational, not a technical explanation of how CVE numbering works. Melody could even make this a character trait - occasionally noting "Another backdated one, huh?" to normalize it for regular viewers.
+The prompt should also clarify that if the CVE year is current or last year, no explanation is needed. This only applies when the year is noticeably old (2+ years before current date).
+
+Issue 3: LLM Validation Is Disabled Due to False Positives
+File: script_validator.py and the orchestrator call to it
+Current Behavior:
+The validator has two layers: rule-based checks and LLM-based review. The LLM validation is currently disabled in the orchestrator (there's a comment saying it "causes false positives on real CVE products"). Only rule-based validation runs.
+The Problem:
+The LLM validation layer was designed to catch hallucinations - cases where the script generation LLM invents CVE numbers, statistics, company names, or claims that aren't in the source data. With it disabled, hallucinations can slip through to the final video. The fact-check of a recent episode found several errors including wrong CVE year prefixes and a potentially fabricated vulnerability (QNO Technology CVEs that couldn't be verified in any database).
+The false positive problem was likely that the LLM validator was flagging legitimate but obscure product names as "possible hallucinations" because it didn't recognize them.
+The Fix:
+Re-enable LLM validation but narrow its scope to things that can be objectively verified against the input data. The validator should only flag issues where it can definitively say "this doesn't match the source data."
+Things the LLM validator SHOULD check:
+
+CVE IDs in the script that don't appear in the daily_brief_packet input data (hallucinated CVE numbers)
+Statistics, dollar amounts, or specific numbers that don't appear in the source data
+Claims about active exploitation or CISA KEV status that contradict the input data
+Names of people or researchers that don't appear in the source data
+
+Things the LLM validator should NOT check (these caused false positives):
+
+Whether product names are "real" or recognized (the NVD data is authoritative, not the LLM's knowledge)
+Whether company names sound legitimate
+Whether the technical description is accurate (trust the source data)
+
+The validator prompt needs to be rewritten to make this distinction clear. It should receive the full daily_brief_packet as context and be instructed to verify claims ONLY against that data, not against its general knowledge. If something is in the source data, it's valid even if the LLM has never heard of it.
+Also consider lowering the severity of uncertain flags from "high" to "medium" so they generate warnings but don't block publication. Only definite mismatches (CVE ID not in source data) should be "high" severity.
+
+Issue 4: Story Selection Doesn't Weight by Viewer Impact
+File: orchestrator.py (the story selection logic around lines 558-610)
+Current Behavior:
+The orchestrator selects which news stories to include based on story type priority. It prefers breaches, ransomware, and APT stories over general industry news. It also deduplicates stories that overlap with CVEs being covered. However, it doesn't consider the scale or impact of the story.
+The Problem:
+A ransomware attack on a small Romanian energy company gets the same selection priority as an $8.5 million theft from Trust Wallet affecting millions of users. Both are "breach" type stories, so they're treated equally. But one is dramatically more relevant to viewers.
+The Fix:
+Add impact indicators to story scoring before selection. Stories with markers of large-scale impact should be boosted in priority.
+Indicators that suggest high viewer relevance:
+
+Dollar amounts mentioned (especially millions or billions)
+User counts mentioned (millions of users affected, widespread, etc.)
+Tier 1 vendor names in the story (Microsoft, Apple, Google, etc. - reuse the same tier list from vulnerability filtering)
+Supply chain implications (affects downstream users, not just the target company)
+Government or critical infrastructure involvement
+Nation-state attribution (APT groups, China-nexus, Russia-linked, etc.)
+
+Indicators that suggest lower relevance:
+
+Regional/local companies with no name recognition
+Niche industries (broadcast equipment, industrial controls, specialized hardware)
+No scale indicators in the story
+
+The story with the highest combined score (type priority plus impact indicators) should be the opening hook. Trust Wallet with $8.5M stolen and millions of potential victims should always beat "Romanian energy company hit by ransomware" for the lead story position.
+
+Issue 5: Thumbnail Doesn't Always Feature the Most Compelling Story
+File: thumbnail_generator.py
+Current Behavior:
+The thumbnail generator tries to find the most attention-grabbing text by checking for Tier 1 vendors, then falling back to keyword extraction, then to breach detection in stories, then to generic count labels like "5 CRITICAL".
+The Problem:
+The logic checks vulnerabilities before stories, but the most compelling content might be a story, not a CVE. "TRUST WALLET $8.5M" is more click-worthy than "AKUVOX CRITICAL" but the current logic would show the CVE if it has a higher CVSS score.
+The Fix:
+The thumbnail text selection should consider the same impact scoring used for story selection. Before defaulting to CVE-based text, check if there's a story with high impact markers that would make better thumbnail text.
+Specifically:
+
+If there's a breach story with a dollar amount in the millions, that's probably the best thumbnail text
+If there's a story mentioning a Tier 1 vendor, that beats an unknown vendor CVE
+The "X CRITICAL" fallback is fine when there's no compelling story hook
+
+The thumbnail should match whatever the opening hook of the episode is. If the episode leads with Trust Wallet, the thumbnail should reference Trust Wallet, not an obscure CVE that happens to have a high CVSS score.
+
+Issue 6: No Disclosure That Content Is AI-Generated
+File: generate_script.py and/or orchestrator.py (metadata generation)
+Current Behavior:
+The video is fully automated but there's no indication to viewers that the content is AI-generated.
+The Problem:
+This is both an ethical issue and increasingly a platform policy issue. YouTube and other platforms are moving toward requiring disclosure of AI-generated content. More importantly, viewers have different expectations for AI-generated vs human-created content. If someone discovers the channel is automated without disclosure, it damages trust more than if it had been disclosed upfront.
+The Fix:
+Add a brief disclosure to the video description and consider a brief mention in the intro. This doesn't need to be prominent or apologetic - many successful channels use AI. A simple "Automated daily security briefing" in the description or a quick "your AI-powered security briefing" in the intro is sufficient.
+This also provides cover for occasional errors. Viewers are more forgiving of an automated system making a mistake than they are of human hosts who should know better.
+
+Issue 7: Episodes Are Too Dense for the Format
+File: orchestrator.py (story count logic) and generate_script.py (target duration)
+Current Behavior:
+The script targets 8-12 minutes and tries to cover 3-6 CVEs plus news stories depending on daily volume. The orchestrator logic is:
+
+10+ CVEs available → cover 3 stories
+5-9 CVEs available → cover 4 stories
+Less than 5 CVEs → cover 6 stories
+
+The Problem:
+Even 3 CVEs plus news stories in 10 minutes is too dense for viewers to absorb. Successful cybersecurity YouTube channels typically do deep dives on 1-2 topics, not rapid-fire coverage of many. The current format feels like someone reading a database dump rather than providing insight.
+The Fix:
+Reduce the target coverage significantly. Consider:
+
+Maximum 3-4 vulnerabilities per episode, even on busy days
+Lead with ONE headline story (highest impact) with real depth
+Brief mentions for others rather than full coverage
+If there are 10+ critical CVEs, that's an unusual day - acknowledge it and promise follow-up rather than cramming everything in
+
+The script prompt should also emphasize depth over breadth. "Give viewers one thing they'll remember" rather than "cover everything."
+This pairs with the vendor tiering fix - with proper relevance filtering, you'll naturally have fewer items to cover because the obscure stuff gets filtered out.
+
+Implementation Priority
+
+Vendor tiering in filter_score.py - This is the root cause of most content quality issues. Fix this first.
+CVE year context in generate_script.py - Quick prompt addition that immediately improves viewer understanding.
+Re-enable LLM validation with narrowed scope - Catches errors before they go live.
+Story impact weighting - Ensures the best content gets featured.
+Thumbnail alignment with lead story - Improves click-through rate.
+AI disclosure - Risk mitigation.
+Reduce episode density - Can be done after other fixes are in place.
+
+
+Testing Recommendations
+After implementing fixes, run the pipeline on historical data from the past week and compare:
+
+How many vulnerabilities pass the new filter vs the old filter
+Which vulnerabilities got cut (should be the obscure ones)
+Whether the top story selection matches what a human editor would choose
+Whether the thumbnail text is compelling
+
+Also manually review 2-3 generated scripts before re-enabling auto-publish to verify the changes work as intended.
