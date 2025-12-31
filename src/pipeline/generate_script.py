@@ -262,6 +262,43 @@ def apply_pronunciation_fixes(text: str) -> str:
 # System prompt for script generation
 SYSTEM_PROMPT = """You are writing a daily cybersecurity podcast script. Two hosts, real conversation, not a script reading.
 
+## CRITICAL GROUNDING RULES (READ FIRST)
+
+You will be given specific CVE data and news stories. You MUST follow these rules:
+
+1. **CVE IDs are SACRED** - Use ONLY the exact CVE IDs provided in the data. NEVER modify, invent, or approximate CVE numbers. If the data says CVE-2025-15284, you say CVE-2025-15284 - not CVE-2024-XXX or any placeholder.
+
+2. **Years matter** - If a CVE is from 2025, say "2025". NEVER change the year. CVE-2025-XXXXX means twenty twenty-five, not twenty twenty-four.
+
+3. **Names are EXACT** - Use ONLY the names, companies, and facts from the provided story data. If the data says "Ryan Goldberg from Sygnia", you say exactly that - not "Michael Shin" or "Signia".
+
+4. **No invention** - If information isn't in the provided data, DO NOT make it up. Omit it or speak generally instead of guessing.
+
+5. **No placeholder CVEs** - NEVER use "CVE-2024-XXX", "CVE-XXXX-YYYY", or similar placeholders. Use only real CVE IDs from the input.
+
+6. **Verify before speaking** - Every CVE ID, every company name, every person's name must come directly from the provided data.
+
+VIOLATION OF THESE RULES MAKES THE SCRIPT UNUSABLE. Accuracy is more important than creativity.
+
+## CVE YEAR CONTEXT (IMPORTANT)
+
+When a CVE year doesn't match the current year, explain why it's news now.
+
+**The Problem:** NVD assigns CVE IDs when first reported, which can be years before public disclosure. Viewers hear "CVE-2022-50794" and think it's old news.
+
+**The Fix:** Briefly acknowledge and explain. Make it conversational, not technical.
+
+**Example phrases (use naturally, vary them):**
+- "CVE-2022-50794 - and yes, that's a 2022 ID, but it just hit the NVD database yesterday"
+- "This one's been in the disclosure queue for a while - vendors sometimes take years to coordinate patches before going public"
+- "Don't let the 2022 date fool you - this is fresh intel, just published"
+- Morgan: "Another backdated one, huh?" (can be a character trait)
+
+**Rules:**
+- Only explain if CVE year is 2+ years before current date
+- One brief mention per CVE - don't belabor it
+- Current/last year CVEs need no explanation
+
 ## THE HOSTS
 
 **Alec (Security Analyst):** Veteran analyst. Calm, measured, seen it all. Doesn't hype - when he says something is serious, you believe him. Authoritative through understatement. He's the technical expert.
@@ -532,7 +569,7 @@ def _generate_llm_dialogue(
             model = genai.GenerativeModel(
                 model_name="gemini-3-flash-preview",
                 generation_config={
-                    "temperature": 0.7,
+                    "temperature": 0.4,  # Lower for factual accuracy (was 0.7)
                     "max_output_tokens": 8000,
                 }
             )
@@ -544,8 +581,13 @@ def _generate_llm_dialogue(
 
             logger.info(f"Gemini API success: {len(response_text)} chars")
 
+            # Debug: log first 500 chars of response to understand format issues
+            logger.debug(f"Response preview: {response_text[:500]}...")
+
             # Extract JSON from response
             dialogue = _parse_dialogue_response(response_text)
+            if not dialogue:
+                logger.warning(f"Empty dialogue parsed. Full response:\n{response_text[:1000]}")
             return dialogue
 
         except Exception as e:
@@ -593,6 +635,13 @@ def _build_content_prompt(vuln_data: List[dict], story_data: List[dict]) -> str:
 - Use story IDs in story_refs for tracking
 - Target 8-12 minutes total runtime
 - CVE mentioned max twice (intro + wrap-up)
+
+## FINAL GROUNDING CHECK
+Before outputting, verify:
+- Every CVE ID in your script exists EXACTLY in the vulnerability data above
+- Every person/company name in your script exists EXACTLY in the story data above
+- You have NOT invented any CVE numbers (no XXX, YYY, ZZZ placeholders)
+- All CVE years match the input data (2025 stays 2025, not 2024)
 """)
 
     return "\n".join(prompt_parts)
