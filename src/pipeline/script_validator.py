@@ -413,19 +413,19 @@ You will receive:
 - **medium**: Names or attributions not verifiable against source (may be ok if general)
 
 ## OUTPUT FORMAT (JSON only)
-{
+{{
   "issues_found": true/false,
   "issues": [
-    {
+    {{
       "type": "hallucinated_cve|wrong_statistic|false_claim|unverified_name",
       "severity": "critical|high|medium",
       "script_excerpt": "the problematic text from script",
       "explanation": "why this doesn't match source data",
       "source_check": "what you looked for in source data"
-    }
+    }}
   ],
   "summary": "Brief summary of findings"
-}
+}}
 
 ## SOURCE DATA
 {source_data}
