@@ -557,16 +557,19 @@ def _run_news_ingest(config: dict) -> list:
 
 def _select_stories_for_episode(stories: list, vulnerabilities: list) -> list:
     """
-    Select stories for the episode based on content needs.
+    Select stories for the episode based on content needs and impact.
 
     Strategy:
+    - Re-score stories with impact indicators
     - If many CVEs (5+), include 1-2 stories
     - If few CVEs (1-3), include 3-5 stories to fill time
-    - Prioritize breach/ransomware/APT over industry news
+    - Prioritize high-impact stories over story type
     - Exclude stories that overlap with CVEs we're covering
 
-    Target: 8-12 minute episode (CVEs ~3-4 min, news fills rest)
+    Target: 8-12 minute episode
     """
+    from .ingest.story_scoring import rank_stories_by_impact
+
     if not stories:
         return []
 
@@ -576,37 +579,29 @@ def _select_stories_for_episode(stories: list, vulnerabilities: list) -> list:
     # Filter out stories that are primarily about CVEs we're already covering
     filtered_stories = []
     for story in stories:
-        # If story mentions CVEs we're covering, skip it (we'll cover in CVE section)
-        if story.mentioned_cves and all(cve in covered_cves for cve in story.mentioned_cves):
+        if hasattr(story, 'mentioned_cves') and story.mentioned_cves and all(cve in covered_cves for cve in story.mentioned_cves):
             continue
         filtered_stories.append(story)
 
+    # Re-rank by impact score
+    ranked_stories = rank_stories_by_impact(filtered_stories)
+
     # Determine how many stories based on CVE count
-    # Increased story counts to help reach 8+ minute target
     vuln_count = len(vulnerabilities)
     if vuln_count >= 10:
-        # Many CVEs - still include stories for variety
         max_stories = 3
     elif vuln_count >= 5:
-        # Moderate CVEs - good balance
         max_stories = 4
     else:
-        # Few CVEs - more stories to fill time
         max_stories = 6
 
-    # Prioritize high-impact story types
-    priority_types = ["breach", "ransomware", "apt", "threat_intel"]
+    # Take top stories by impact (already sorted)
+    selected = ranked_stories[:max_stories]
 
-    priority_stories = [s for s in filtered_stories if s.story_type.value in priority_types]
-    other_stories = [s for s in filtered_stories if s.story_type.value not in priority_types]
+    logger.info(f"Selected {len(selected)} stories by impact (max {max_stories} based on {vuln_count} CVEs)")
+    if selected:
+        logger.info(f"Lead story: {selected[0].title[:50]}... (impact={selected[0].impact_score:.0f})")
 
-    # Take priority stories first, then fill with others
-    selected = priority_stories[:max_stories]
-    remaining_slots = max_stories - len(selected)
-    if remaining_slots > 0:
-        selected.extend(other_stories[:remaining_slots])
-
-    logger.info(f"Selected {len(selected)} stories (max {max_stories} based on {vuln_count} CVEs)")
     return selected
 
 
