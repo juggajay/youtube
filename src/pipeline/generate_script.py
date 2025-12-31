@@ -1,5 +1,5 @@
 """
-Script Generator - Creates Alec/Melody dialogue from vulnerability and news data.
+Script Generator - Creates Alex/Morgan dialogue from vulnerability and news data.
 
 Uses an LLM to generate natural conversation between the two personas.
 Combines CVE analysis with general security news for comprehensive coverage.
@@ -301,59 +301,59 @@ When a CVE year doesn't match the current year, explain why it's news now.
 
 ## THE HOSTS
 
-**Alec (Security Analyst):** Veteran analyst. Calm, measured, seen it all. Doesn't hype - when he says something is serious, you believe him. Authoritative through understatement. He's the technical expert.
+**Alex (Security Analyst):** Veteran analyst. Calm, measured, seen it all. Doesn't hype - when he says something is serious, you believe him. Authoritative through understatement. He's the technical expert.
 
-**Melody (Co-host):** The context-adder. NOT just an interviewer - she's half of the duo. She connects dots, remembers past incidents, spots patterns. "Didn't these guys have issues last year?" / "This is like that MOVEit thing..." She's well-read on security news but not a technical expert. Confident but collaborative tone - sometimes certain, sometimes thinking out loud ("Wait, this reminds me of... what was it...").
+**Morgan (Co-host):** The context-adder. NOT just an interviewer - she's half of the duo. She connects dots, remembers past incidents, spots patterns. "Didn't these guys have issues last year?" / "This is like that MOVEit thing..." She's well-read on security news but not a technical expert. Confident but collaborative tone - sometimes certain, sometimes thinking out loud ("Wait, this reminds me of... what was it...").
 
-**Dynamic:** True co-hosts who build on each other. Melody CONTRIBUTES, not just asks questions. She adds historical context, connects today's news to past incidents, occasionally finishes Alec's thoughts.
+**Dynamic:** True co-hosts who build on each other. Morgan CONTRIBUTES, not just asks questions. She adds historical context, connects today's news to past incidents, occasionally finishes Alex's thoughts.
 
 ## EPISODE STRUCTURE
 
 **INTRO - Hook First (~15 sec):**
-- Alec LEADS with the biggest headline (the hook - grab attention immediately)
-- Melody does quick intro: "I'm Melody, that's Alec. Let's break it down."
+- Alex LEADS with the biggest headline (the hook - grab attention immediately)
+- Morgan does quick intro: "I'm Morgan, that's Alex. Let's break it down."
 - Straight into content
 
 Example:
-> Alec: "A critical file transfer flaw is being exploited right now - CISA just added it to the KEV list."
-> Melody: "I'm Melody, that's Alec. Let's break it down."
+> Alex: "A critical file transfer flaw is being exploited right now - CISA just added it to the KEV list."
+> Morgan: "I'm Morgan, that's Alex. Let's break it down."
 
 **SECTION 1: Vulnerabilities (~3-4 min):**
 - Cover CVEs in priority order (critical first)
 - For each: Setup → Stakes → Action
-- Melody contributes context: "Wasn't there a similar issue with..." / "That's the third file transfer vendor this year..."
+- Morgan contributes context: "Wasn't there a similar issue with..." / "That's the third file transfer vendor this year..."
 - They volley naturally, building on each other
 
 **SECTION 2: Security News (~3-5 min):**
 - Natural transition into breaches, threat intel, industry news
-- Melody connects dots: "This is giving me Change Healthcare vibes" / "Same playbook as..."
+- Morgan connects dots: "This is giving me Change Healthcare vibes" / "Same playbook as..."
 - For breaches: Who, what exposed, patterns
 - For threats: Who's active, who's targeted
 
 **OUTRO - Signature Sign-off (~15 sec):**
-- Alec gives final priority/action
-- Melody does CTA: "If this saved you time, subscribe and hit the bell - we're here every morning."
-- Alec delivers sign-off: "Stay patched, stay paranoid."
+- Alex gives final priority/action
+- Morgan does CTA: "If this saved you time, subscribe and hit the bell - we're here every morning."
+- Alex delivers sign-off: "Stay patched, stay paranoid."
 
 ALWAYS end with this exact exchange:
-> Melody: "If this saved you time, subscribe and hit the bell - we're here every morning."
-> Alec: "Stay patched, stay paranoid."
+> Morgan: "If this saved you time, subscribe and hit the bell - we're here every morning."
+> Alex: "Stay patched, stay paranoid."
 
-## MELODY'S CONTRIBUTIONS (CRITICAL)
+## MORGAN'S CONTRIBUTIONS (CRITICAL)
 
 She is NOT a question machine. She ADDS value:
 - Historical context: "Didn't Cleo have issues back in 2023 too?"
 - Pattern recognition: "That's three file transfer vendors this year..."
 - Connections: "This feels like MOVEit all over again"
 - Thinking out loud: "Wait, this reminds me of... what was it..."
-- Building on Alec: "Right, and the scary part is..."
+- Building on Alex: "Right, and the scary part is..."
 
-BAD Melody (don't do this):
+BAD Morgan (don't do this):
 > "What's the fix?"
 > "Who should be worried?"
 > "How bad is it?"
 
-GOOD Melody:
+GOOD Morgan:
 > "Wasn't there something similar with Ivanti earlier this year?"
 > "That's the same attack vector as... what was it, the Fortra thing?"
 > "This is giving me SolarWinds vibes - same idea of hitting the supply chain."
@@ -368,11 +368,11 @@ GOOD Melody:
 - Vary rhythm: short punchy exchanges mixed with longer thoughts
 
 **Natural back-and-forth example:**
-> Alec: "This is CVE-2024-50623, hitting Cleo's file transfer products..."
-> Melody: "Cleo - wait, weren't they in the news recently? Or am I thinking of MOVEit?"
-> Alec: "Different vendor, but same space. File transfer's been getting hammered."
-> Melody: "That's like the third one this year. There's a pattern here."
-> Alec: "Exactly. Attackers know these sit at network edges, handle sensitive data..."
+> Alex: "This is CVE-2024-50623, hitting Cleo's file transfer products..."
+> Morgan: "Cleo - wait, weren't they in the news recently? Or am I thinking of MOVEit?"
+> Alex: "Different vendor, but same space. File transfer's been getting hammered."
+> Morgan: "That's like the third one this year. There's a pattern here."
+> Alex: "Exactly. Attackers know these sit at network edges, handle sensitive data..."
 
 ## TECHNICAL LANGUAGE RULES
 
@@ -411,8 +411,8 @@ Don't overuse - one or two per segment max.
 
 Return ONLY a JSON array:
 [
-  {"speaker": "Alec", "text": "A critical flaw in Cleo file transfer...", "cve_refs": ["CVE-2024-50623"], "story_refs": []},
-  {"speaker": "Melody", "text": "I'm Melody, that's Alec. Let's break it down.", "cve_refs": [], "story_refs": []}
+  {"speaker": "Alex", "text": "A critical flaw in Cleo file transfer...", "cve_refs": ["CVE-2024-50623"], "story_refs": []},
+  {"speaker": "Morgan", "text": "I'm Morgan, that's Alex. Let's break it down.", "cve_refs": [], "story_refs": []}
 ]
 
 Target: 8-12 minutes (~1200-1800 words).
@@ -660,15 +660,15 @@ def _generate_mock_dialogue(
     critical_count = sum(1 for v in vulnerabilities if v.priority and v.priority.value == 'CRITICAL')
     breach_count = sum(1 for s in stories if s.story_type.value == 'breach')
 
-    # Opening - Melody
+    # Opening - Morgan
     dialogue.append({
-        "speaker": "Melody",
-        "text": "Good morning, I'm Melody. With me as always, security analyst Alec. What are you watching today?",
+        "speaker": "Morgan",
+        "text": "Good morning, I'm Morgan. With me as always, security analyst Alex. What are you watching today?",
         "cve_refs": [],
         "story_refs": [],
     })
 
-    # Opening - Alec gives headlines
+    # Opening - Alex gives headlines
     headlines = []
     if vulnerabilities:
         headlines.append(f"{len(vulnerabilities)} vulnerabilities to cover, {critical_count} critical")
@@ -678,7 +678,7 @@ def _generate_mock_dialogue(
             headlines.append(f"including {breach_count} breach{'es' if breach_count > 1 else ''}")
 
     dialogue.append({
-        "speaker": "Alec",
+        "speaker": "Alex",
         "text": f"Morning. {'Busy day. ' if len(vulnerabilities) > 2 else ''}{', '.join(headlines)}. Let's get into it.",
         "cve_refs": [],
         "story_refs": [],
@@ -689,9 +689,9 @@ def _generate_mock_dialogue(
         cve_spoken = _format_cve_for_speech(vuln.cve_id)
         version_spoken = _format_version_for_speech(vuln.affected_versions)
 
-        # Alec introduces the vulnerability
+        # Alex introduces the vulnerability
         dialogue.append({
-            "speaker": "Alec",
+            "speaker": "Alex",
             "text": f"{cve_spoken} affects {vuln.vendor} {vuln.product}. "
                     f"{'Critical severity' if vuln.priority and vuln.priority.value == 'CRITICAL' else 'High severity'} - "
                     f"{'actively exploited according to CISA' if vuln.cisa_kev else f'CVSS {vuln.cvss_score:.1f}'}. "
@@ -700,18 +700,18 @@ def _generate_mock_dialogue(
             "story_refs": [],
         })
 
-        # Melody asks about impact
+        # Morgan asks about impact
         dialogue.append({
-            "speaker": "Melody",
+            "speaker": "Morgan",
             "text": "Who should be worried?",
             "cve_refs": [],
             "story_refs": [],
         })
 
-        # Alec provides BLUF
+        # Alex provides BLUF
         bluf = vuln.bluf if vuln.bluf else f"Anyone running {vuln.vendor} {vuln.product}"
         dialogue.append({
-            "speaker": "Alec",
+            "speaker": "Alex",
             "text": f"{bluf}. Patch today if you can.",
             "cve_refs": [vuln.cve_id],
             "story_refs": [],
@@ -720,7 +720,7 @@ def _generate_mock_dialogue(
     # Transition to news
     if stories:
         dialogue.append({
-            "speaker": "Melody",
+            "speaker": "Morgan",
             "text": "Beyond the patches, what else caught your attention this week?",
             "cve_refs": [],
             "story_refs": [],
@@ -741,13 +741,13 @@ def _generate_mock_dialogue(
             intro = story_type_intros.get(story.story_type.value, "")
 
             dialogue.append({
-                "speaker": "Alec",
+                "speaker": "Alex",
                 "text": f"{intro} {story.title}. {story.summary[:200]}...",
                 "cve_refs": story.mentioned_cves,
                 "story_refs": [story.id],
             })
 
-            # Melody reacts/asks
+            # Morgan reacts/asks
             story_questions = {
                 "breach": "How bad is the damage?",
                 "ransomware": "Do we know who's behind it?",
@@ -758,14 +758,14 @@ def _generate_mock_dialogue(
             question = story_questions.get(story.story_type.value, "What should people know?")
 
             dialogue.append({
-                "speaker": "Melody",
+                "speaker": "Morgan",
                 "text": question,
                 "cve_refs": [],
                 "story_refs": [story.id],
             })
 
             dialogue.append({
-                "speaker": "Alec",
+                "speaker": "Alex",
                 "text": f"Still developing, but worth keeping an eye on. Source is {story.source_name}.",
                 "cve_refs": [],
                 "story_refs": [story.id],
@@ -773,7 +773,7 @@ def _generate_mock_dialogue(
 
     # Wrap-up
     dialogue.append({
-        "speaker": "Melody",
+        "speaker": "Morgan",
         "text": "Let's wrap up. Quick recap of the action items?",
         "cve_refs": [],
         "story_refs": [],
@@ -788,15 +788,15 @@ def _generate_mock_dialogue(
     recap_text = ". ".join(recap_items) if recap_items else "Keep your systems updated"
 
     dialogue.append({
-        "speaker": "Alec",
+        "speaker": "Alex",
         "text": f"{recap_text}. That's the priority list for today.",
         "cve_refs": [v.cve_id for v in vulnerabilities[:3] if v.priority and v.priority.value == 'CRITICAL'],
         "story_refs": [],
     })
 
     dialogue.append({
-        "speaker": "Melody",
-        "text": "Thanks Alec. I'm Melody, stay secure out there.",
+        "speaker": "Morgan",
+        "text": "Thanks Alex. I'm Morgan, stay secure out there.",
         "cve_refs": [],
         "story_refs": [],
     })
