@@ -561,8 +561,9 @@ def _select_stories_for_episode(stories: list, vulnerabilities: list) -> list:
 
     Strategy:
     - Re-score stories with impact indicators
-    - If many CVEs (5+), include 1-2 stories
-    - If few CVEs (1-3), include 3-5 stories to fill time
+    - If many CVEs (10+), include max 3 stories
+    - If moderate CVEs (5-9), include max 4 stories
+    - If few CVEs (0-4), include max 6 stories to fill time
     - Prioritize high-impact stories over story type
     - Exclude stories that overlap with CVEs we're covering
 
