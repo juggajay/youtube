@@ -58,15 +58,25 @@ KNOWN_RANSOMWARE_GROUPS = {
     "CACTUS",
     "HUNTERS INTERNATIONAL",
     "INC RANSOM",
+    "GENTLEMEN",  # Romanian energy attack Dec 2025
+    "LYNX",
+    "FOG",
+    "FUNKSEC",
 }
 
 # Common hallucination patterns to flag
 SUSPICIOUS_PATTERNS = [
-    r"gentleman\s+ransomware",  # Known hallucination
     r"proxy\s*loon",  # Should be ProxyLogon
     r"\b(amazing|incredible|fantastic)\b",  # AI hype words
     r"as an AI",  # AI self-reference leak
     r"I cannot",  # AI refusal leak
+    r"CVE[-\s]?\d{4}[-\s]?[XYZ]+",  # Placeholder CVE patterns
+    r"CVE[-\s]?XXXX",  # Placeholder year
+    r"CVE[-\s]?20\d\d[-\s]?X+",  # Placeholder number
+    r"\bversion\s+X\.Y",  # Placeholder version
+    r"\bv?\.?\d+\.X\b",  # Placeholder minor version
+    r"Michael\s+Shin",  # Known wrong name from bad script
+    r"\bSignia\b",  # Misspelling of Sygnia
 ]
 
 # Known mispronunciation errors (from transcript analysis)
@@ -126,12 +136,21 @@ def validate_ransomware_groups(text: str) -> List[Dict]:
     """Flag unknown ransomware group names."""
     issues = []
 
-    # Look for "X ransomware" patterns
-    ransomware_pattern = r'(\w+(?:\s+\w+)?)\s+ransomware'
-    matches = re.findall(ransomware_pattern, text, re.IGNORECASE)
+    # Look for "X ransomware" patterns where X is a capitalized proper noun
+    # This avoids false positives like "supply chain ransomware" or "the ransomware"
+    ransomware_pattern = r'\b([A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+)?)\s+ransomware\b'
+    matches = re.findall(ransomware_pattern, text)
+
+    # Also check for patterns like "ransomware group called X"
+    called_pattern = r'(?:ransomware\s+(?:group|gang|actor)s?\s+(?:called|named|known as)\s+)["\']?([A-Za-z0-9]+)["\']?'
+    matches.extend(re.findall(called_pattern, text, re.IGNORECASE))
 
     for group_name in matches:
         normalized = group_name.upper().strip()
+        # Skip common false positives
+        skip_words = {"THE", "THIS", "THAT", "ANOTHER", "OTHER", "SAME", "NEW"}
+        if normalized in skip_words:
+            continue
         if normalized not in KNOWN_RANSOMWARE_GROUPS:
             issues.append({
                 "type": "unknown_ransomware",
@@ -209,6 +228,134 @@ def cross_check_vendors(script: dict, input_data: dict) -> List[Dict]:
     return issues
 
 
+def cross_check_cves(script: dict, input_data: dict) -> List[Dict]:
+    """
+    CRITICAL: Verify ALL CVE IDs in script exist in input data.
+
+    This catches LLM hallucination of CVE numbers.
+    """
+    issues = []
+
+    # Extract CVE IDs from input data
+    input_cves = set()
+    for vuln in input_data.get("vulnerabilities", []):
+        cve_id = vuln.get("cve_id", "")
+        if cve_id:
+            # Normalize: CVE-2025-12345 -> CVE-2025-12345
+            normalized = cve_id.upper().replace(" ", "-")
+            input_cves.add(normalized)
+
+    # Also check stories for mentioned CVEs
+    for story in input_data.get("stories", []):
+        for cve in story.get("mentioned_cves", []):
+            normalized = cve.upper().replace(" ", "-")
+            input_cves.add(normalized)
+
+    # Extract CVEs mentioned in script
+    script_text = " ".join([line.get("text", "") for line in script.get("dialogue", [])])
+
+    # Find all CVE patterns in script
+    cve_pattern = r'CVE[-\s]?(\d{4})[-\s]?(\d+)'
+    matches = re.findall(cve_pattern, script_text, re.IGNORECASE)
+
+    for year, number in matches:
+        script_cve = f"CVE-{year}-{number}"
+
+        # Check if this CVE exists in input
+        if script_cve not in input_cves:
+            issues.append({
+                "type": "hallucinated_cve",
+                "severity": "critical",
+                "message": f"CVE {script_cve} not found in input data - possible hallucination",
+                "value": script_cve
+            })
+
+    # Check for placeholder patterns (XXX, YYY, etc.)
+    placeholder_pattern = r'CVE[-\s]?\d{4}[-\s]?[XYZ]+|CVE[-\s]?[XYZ]+[-\s]?\d+'
+    placeholders = re.findall(placeholder_pattern, script_text, re.IGNORECASE)
+    for placeholder in placeholders:
+        issues.append({
+            "type": "placeholder_cve",
+            "severity": "critical",
+            "message": f"Placeholder CVE detected: {placeholder} - must use real CVE IDs",
+            "value": placeholder
+        })
+
+    return issues
+
+
+def cross_check_story_facts(script: dict, input_data: dict) -> List[Dict]:
+    """
+    Verify key facts from stories (names, companies) appear in input data.
+
+    This catches LLM invention of names and company misspellings.
+    """
+    issues = []
+
+    # Build a set of valid names/companies from story data
+    valid_terms = set()
+    for story in input_data.get("stories", []):
+        # Add story title words (company names often in titles)
+        title = story.get("title", "")
+        # Extract capitalized words (likely proper nouns)
+        proper_nouns = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', title)
+        for noun in proper_nouns:
+            valid_terms.add(noun.lower())
+
+        # Add summary proper nouns
+        summary = story.get("summary", "")
+        proper_nouns = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', summary)
+        for noun in proper_nouns:
+            valid_terms.add(noun.lower())
+
+    # Common words to ignore (not company names)
+    ignore_words = {
+        "the", "and", "for", "with", "this", "that", "from", "have", "has",
+        "been", "were", "was", "are", "but", "not", "they", "their", "what",
+        "when", "where", "which", "who", "will", "would", "could", "should",
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        "january", "february", "march", "april", "may", "june", "july",
+        "august", "september", "october", "november", "december",
+        "security", "cyber", "attack", "breach", "ransomware", "malware",
+        "vulnerability", "exploit", "patch", "update", "critical", "high",
+        "alec", "melody",  # Host names
+    }
+    valid_terms -= ignore_words
+
+    # Check script for potential company/person names not in stories
+    script_text = " ".join([line.get("text", "") for line in script.get("dialogue", [])])
+
+    # This is a lighter check - we flag if we see patterns that look like
+    # invented names (e.g., ransomware groups, company names) that aren't
+    # in the input data
+
+    # Check for "X ransomware" where X isn't known
+    # Already handled by validate_ransomware_groups
+
+    # Check for "according to X" or "X confirmed" patterns
+    attribution_pattern = r'(?:according to|confirmed by|reported by|said)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'
+    attributions = re.findall(attribution_pattern, script_text)
+
+    for name in attributions:
+        name_lower = name.lower()
+        # Check if it's a known source or in our valid terms
+        known_sources = {"bleeping computer", "krebs", "the record", "dark reading",
+                        "threatpost", "hacker news", "security week", "schneier",
+                        "cisa", "fbi", "nsa", "google", "microsoft", "apple"}
+        if name_lower not in known_sources and name_lower not in valid_terms:
+            # Check if any part of the name is in valid_terms
+            name_parts = name_lower.split()
+            if not any(part in valid_terms for part in name_parts):
+                issues.append({
+                    "type": "unverified_attribution",
+                    "severity": "medium",
+                    "message": f"Attribution to '{name}' not found in story data - verify source",
+                    "value": name
+                })
+
+    return issues
+
+
 def run_rule_based_validation(script: dict, input_data: dict = None) -> List[Dict]:
     """Run all rule-based checks."""
 
@@ -225,6 +372,10 @@ def run_rule_based_validation(script: dict, input_data: dict = None) -> List[Dic
 
     if input_data:
         all_issues.extend(cross_check_vendors(script, input_data))
+        # CRITICAL: Check that CVEs in script exist in input data
+        all_issues.extend(cross_check_cves(script, input_data))
+        # Check that story facts (names, companies) match input
+        all_issues.extend(cross_check_story_facts(script, input_data))
 
     return all_issues
 
@@ -233,6 +384,57 @@ def run_rule_based_validation(script: dict, input_data: dict = None) -> List[Dic
 # LAYER 2: LLM VALIDATION
 # =============================================================================
 
+# V2: Focused prompt that only checks against source data (not general knowledge)
+LLM_VALIDATION_PROMPT_V2 = """You are a fact-checker verifying a cybersecurity podcast script against its source data.
+
+## YOUR ONLY JOB
+Verify that claims in the script match the provided SOURCE DATA. You are NOT a security expert - trust the source data as authoritative.
+
+## SOURCE DATA PROVIDED
+You will receive:
+1. Vulnerability data (CVE IDs, vendors, products, CVSS scores)
+2. Story data (headlines, summaries, company names, researcher names)
+
+## WHAT TO CHECK (flag as issues)
+1. **CVE IDs** - Flag if script mentions CVE-XXXX-YYYYY that does NOT appear in source data or input data
+2. **Statistics** - Flag specific numbers ($8.5 million, 2 million users) that don't appear in source data
+3. **CISA KEV status** - Flag if script claims "actively exploited" but source shows cisa_kev=false
+4. **Names** - Flag researcher/person names that don't appear in source data
+
+## WHAT NOT TO CHECK (ignore these)
+1. **Product names** - If source says "Akuvox S539", trust it's real. Do not flag unfamiliar products.
+2. **Company names** - Source data is authoritative. Do not flag because you haven't heard of a company.
+3. **Technical accuracy** - Do not verify if the vulnerability description is technically correct.
+4. **Writing quality** - Do not flag style issues, just factual mismatches.
+
+## SEVERITY LEVELS
+- **critical**: CVE ID in script not found in source data (definite hallucination)
+- **high**: Statistics/claims that directly contradict source data
+- **medium**: Names or attributions not verifiable against source (may be ok if general)
+
+## OUTPUT FORMAT (JSON only)
+{
+  "issues_found": true/false,
+  "issues": [
+    {
+      "type": "hallucinated_cve|wrong_statistic|false_claim|unverified_name",
+      "severity": "critical|high|medium",
+      "script_excerpt": "the problematic text from script",
+      "explanation": "why this doesn't match source data",
+      "source_check": "what you looked for in source data"
+    }
+  ],
+  "summary": "Brief summary of findings"
+}
+
+## SOURCE DATA
+{source_data}
+
+## SCRIPT TO VERIFY
+{script_text}
+"""
+
+# V1: Original prompt (deprecated - flagged legitimate product names as hallucinations)
 LLM_VALIDATION_PROMPT = """You are a fact-checker for a cybersecurity podcast script.
 
 Review this script and identify ANY of these issues:
@@ -464,24 +666,25 @@ def validate_and_fix(
         )
         all_reports.append(report)
 
-        if passed or report["high_severity_count"] == 0:
+        blocking_count = report.get("critical_severity_count", 0) + report["high_severity_count"]
+        if passed or blocking_count == 0:
             logger.info(f"✅ Script passed validation on attempt {attempt}")
             report["attempts"] = attempt
             return current_script, True, report
 
-        # Collect all issues to fix
+        # Collect all blocking issues to fix (critical + high)
         all_issues = report["rule_based_issues"] + report["llm_issues"]
-        high_issues = [i for i in all_issues if i.get("severity") == "high"]
+        blocking_issues = [i for i in all_issues if i.get("severity") in ("critical", "high")]
 
-        if not high_issues:
-            logger.info("No high-severity issues to fix")
+        if not blocking_issues:
+            logger.info("No critical/high-severity issues to fix")
             report["attempts"] = attempt
             return current_script, True, report
 
-        logger.info(f"🔧 Fixing {len(high_issues)} high-severity issues...")
+        logger.info(f"🔧 Fixing {len(blocking_issues)} critical/high-severity issues...")
 
         # Fix the script
-        current_script = fix_script_issues(current_script, high_issues)
+        current_script = fix_script_issues(current_script, blocking_issues)
 
     # Max attempts reached
     logger.warning(f"⚠️ Max attempts ({max_attempts}) reached, proceeding with warnings")
@@ -523,6 +726,7 @@ def validate_script(
         "rule_based_issues": [],
         "llm_issues": [],
         "total_issues": 0,
+        "critical_severity_count": 0,
         "high_severity_count": 0,
         "medium_severity_count": 0,
         "low_severity_count": 0,
@@ -552,19 +756,22 @@ def validate_script(
 
     for issue in all_issues:
         severity = issue.get("severity", "low").lower()
-        if severity == "high":
+        if severity == "critical":
+            report["critical_severity_count"] += 1
+        elif severity == "high":
             report["high_severity_count"] += 1
         elif severity == "medium":
             report["medium_severity_count"] += 1
         else:
             report["low_severity_count"] += 1
 
-    # Determine pass/fail
-    if fail_on_high and report["high_severity_count"] > 0:
+    # Determine pass/fail - critical OR high severity issues block
+    blocking_issues = report["critical_severity_count"] + report["high_severity_count"]
+    if fail_on_high and blocking_issues > 0:
         report["passed"] = False
-        logger.error(f"VALIDATION FAILED: {report['high_severity_count']} high-severity issues found")
+        logger.error(f"VALIDATION FAILED: {report['critical_severity_count']} critical, {report['high_severity_count']} high-severity issues found")
     else:
-        logger.info(f"VALIDATION PASSED: {report['total_issues']} issues ({report['high_severity_count']} high)")
+        logger.info(f"VALIDATION PASSED: {report['total_issues']} issues ({report['critical_severity_count']} critical, {report['high_severity_count']} high)")
 
     logger.info("=" * 60)
 
