@@ -1,6 +1,10 @@
 """Tests for orchestrator pipeline."""
 
+from pathlib import Path
+
 import pytest
+
+PROJECT_ROOT = Path(__file__).parent.parent
 
 
 class TestValidationStep:
@@ -8,7 +12,7 @@ class TestValidationStep:
 
     def test_llm_validation_is_enabled(self):
         """LLM validation should be enabled."""
-        with open("src/orchestrator.py", encoding="utf-8") as f:
+        with open(PROJECT_ROOT / "src" / "orchestrator.py", encoding="utf-8") as f:
             source = f.read()
 
         # Should have use_llm=True
@@ -19,7 +23,7 @@ class TestValidationStep:
 
     def test_validate_and_fix_called_with_input_data(self):
         """validate_and_fix should receive input_data for V2 prompt."""
-        with open("src/orchestrator.py", encoding="utf-8") as f:
+        with open(PROJECT_ROOT / "src" / "orchestrator.py", encoding="utf-8") as f:
             source = f.read()
 
         # Should pass input_data to validate_and_fix
@@ -45,7 +49,7 @@ class TestLLMValidationConfiguration:
 
     def test_validate_script_passes_input_data_to_llm(self):
         """validate_script should pass input_data to run_llm_validation."""
-        with open("src/pipeline/script_validator.py", encoding="utf-8") as f:
+        with open(PROJECT_ROOT / "src" / "pipeline" / "script_validator.py", encoding="utf-8") as f:
             source = f.read()
 
         # Should call run_llm_validation with input_data
