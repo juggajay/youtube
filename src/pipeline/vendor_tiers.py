@@ -11,9 +11,6 @@ Tiers determine relevance weighting in vulnerability filtering:
 import re
 from typing import Optional
 
-# Minimum length for substring matching - shorter names require exact match
-MIN_SUBSTRING_MATCH_LENGTH = 4
-
 # Tier 1: Massive install base - billions of users
 TIER_1 = {
     # OS & Platforms
@@ -75,7 +72,14 @@ def _matches_vendor(tier_vendor: str, vendor_upper: str) -> bool:
     Uses word-boundary matching to prevent false positives like:
     - "GO" matching "GOOGLE"
     - "SAP" matching "SAPLING"
-    - "F5" matching "F500"
+    - "SOFT" matching "MICROSOFT"
+
+    Only allows:
+    1. Exact match - "MICROSOFT" == "MICROSOFT"
+    2. Known vendor as complete word within input - "Microsoft Windows" contains "MICROSOFT"
+
+    Does NOT allow:
+    - Input as arbitrary substring of known vendor ("SOFT" in "MICROSOFT")
 
     Args:
         tier_vendor: The known vendor name from a tier set (uppercase)
@@ -88,28 +92,10 @@ def _matches_vendor(tier_vendor: str, vendor_upper: str) -> bool:
     if tier_vendor == vendor_upper:
         return True
 
-    # For short strings (< MIN_SUBSTRING_MATCH_LENGTH chars),
-    # require word boundary matching to avoid false positives.
-    # Check BOTH the tier vendor AND the input - either being short
-    # can cause false positive substring matches.
-    min_len = min(len(tier_vendor), len(vendor_upper))
-    if min_len < MIN_SUBSTRING_MATCH_LENGTH:
-        # Build regex pattern with word boundaries
-        # \b handles word boundaries (spaces, start/end, punctuation)
-        pattern = r'\b' + re.escape(tier_vendor) + r'\b'
-        if re.search(pattern, vendor_upper):
-            return True
-        # Also check if input is contained in tier vendor with boundaries
-        pattern = r'\b' + re.escape(vendor_upper) + r'\b'
-        if re.search(pattern, tier_vendor):
-            return True
-        return False
-
-    # For longer strings on both sides, substring matching is safe
-    if tier_vendor in vendor_upper or vendor_upper in tier_vendor:
-        return True
-
-    return False
+    # Check if tier_vendor appears as a complete word in vendor_upper
+    # This handles cases like "Microsoft Windows" containing "MICROSOFT"
+    pattern = r'\b' + re.escape(tier_vendor) + r'\b'
+    return bool(re.search(pattern, vendor_upper))
 
 
 def get_vendor_tier(vendor: Optional[str]) -> int:

@@ -100,3 +100,28 @@ class TestSubstringMatchingEdgeCases:
         """'AMD' should match with proper boundaries."""
         assert get_vendor_tier("AMD") == 1
         assert get_vendor_tier("AMADEUS") == 4  # Not a match
+
+    def test_soft_is_tier_4(self):
+        """'SOFT' should not match 'MICROSOFT'."""
+        assert get_vendor_tier("SOFT") == 4
+        assert get_vendor_tier("soft") == 4
+
+    def test_micro_is_tier_4(self):
+        """'MICRO' should not match 'MICROSOFT'."""
+        assert get_vendor_tier("MICRO") == 4
+        assert get_vendor_tier("micro") == 4
+
+    def test_ogle_is_tier_4(self):
+        """'OGLE' should not match 'GOOGLE'."""
+        assert get_vendor_tier("OGLE") == 4
+        assert get_vendor_tier("ogle") == 4
+
+    def test_goog_is_tier_4(self):
+        """'GOOG' should not match 'GOOGLE'."""
+        assert get_vendor_tier("GOOG") == 4
+        assert get_vendor_tier("goog") == 4
+
+    def test_chro_is_tier_4(self):
+        """'CHRO' should not match 'CHROME'."""
+        assert get_vendor_tier("CHRO") == 4
+        assert get_vendor_tier("chro") == 4
