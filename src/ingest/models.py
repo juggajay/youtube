@@ -179,6 +179,9 @@ class Vulnerability:
     last_modified: Optional[str] = None
     source: str = "NVD"
 
+    # Internal tracking
+    _is_fallback: bool = False  # True if included via minimum content guarantee
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -203,6 +206,7 @@ class Vulnerability:
             "published_date": self.published_date,
             "last_modified": self.last_modified,
             "source": self.source,
+            "_is_fallback": self._is_fallback,
         }
 
     @classmethod
@@ -234,4 +238,5 @@ class Vulnerability:
             published_date=data.get("published_date"),
             last_modified=data.get("last_modified"),
             source=data.get("source", "NVD"),
+            _is_fallback=data.get("_is_fallback", False),
         )

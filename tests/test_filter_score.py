@@ -210,3 +210,29 @@ class TestMinimumContentGuarantee:
 
         included, filtered = filter_vulnerabilities(vulns)
         assert len(included) >= 3
+
+    def test_empty_input_returns_empty_lists(self):
+        """Empty input should return two empty lists."""
+        from src.pipeline.filter_score import filter_vulnerabilities
+
+        included, filtered = filter_vulnerabilities([])
+        assert included == []
+        assert filtered == []
+
+    def test_fewer_than_min_content_returns_all(self):
+        """If input has fewer vulns than min_content, return all of them."""
+        from src.pipeline.filter_score import filter_vulnerabilities
+        from src.ingest.models import Vulnerability
+
+        # Only 2 vulns, but min_content=3
+        vulns = [
+            Vulnerability(cve_id="CVE-2025-0001", cvss_score=9.5,
+                         epss_score=0.15, vendor="Akuvox", product="Product1"),
+            Vulnerability(cve_id="CVE-2025-0002", cvss_score=9.0,
+                         epss_score=0.12, vendor="Akuvox", product="Product2"),
+        ]
+
+        included, filtered = filter_vulnerabilities(vulns, min_content=3)
+        # Should return all 2 vulns (can't meet min of 3 with only 2 input)
+        assert len(included) == 2
+        assert len(filtered) == 0
