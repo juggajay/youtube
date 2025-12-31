@@ -153,3 +153,18 @@ class TestStorySelection:
         # Should only include the unique story
         assert len(selected) == 1
         assert selected[0].id == "story-unique"
+
+
+class TestEpisodeDensity:
+    """Test episode density limits."""
+
+    def test_prompt_includes_density_guidance(self):
+        """SYSTEM_PROMPT should mention limiting CVE coverage."""
+        from src.pipeline.generate_script import SYSTEM_PROMPT
+        # Should mention limiting CVE coverage
+        assert any(phrase in SYSTEM_PROMPT.lower() for phrase in [
+            "maximum",
+            "limit",
+            "depth over breadth",
+            "one thing they'll remember",
+        ])

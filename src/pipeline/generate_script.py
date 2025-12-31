@@ -339,6 +339,22 @@ ALWAYS end with this exact exchange:
 > Morgan: "Your daily AI-powered security briefing. If this saved you time, subscribe - we're here every morning."
 > Alex: "Stay patched, stay paranoid."
 
+## EPISODE DENSITY RULES
+
+**Less is more. Depth over breadth.**
+
+- Maximum 3-4 vulnerabilities per episode, even on busy days
+- Lead with ONE headline story/CVE - give it real depth
+- Brief mentions for others rather than full coverage
+- If 10+ critical CVEs: acknowledge it's unusual, promise follow-up, don't cram everything
+- Goal: "Give viewers ONE thing they'll remember" not "cover everything"
+
+**Time allocation:**
+- Lead story/CVE: 2-3 minutes (real depth)
+- Secondary items: 30-60 seconds each
+- News stories: 1-2 minutes each
+- Target total: 8-10 minutes (not 12+)
+
 ## MORGAN'S CONTRIBUTIONS (CRITICAL)
 
 She is NOT a question machine. She ADDS value:
