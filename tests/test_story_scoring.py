@@ -17,8 +17,8 @@ class TestImpactScoring:
             story_type=StoryType.BREACH,
         )
         score = calculate_impact_score(story)
-        # $X Million = 30 + millions of users = 25 + BREACH = 10 = 65
-        assert score >= 60  # High impact
+        # $X Million = 50 + millions of users = 60 + BREACH = 10 = 100 (capped)
+        assert score >= 80  # High impact
 
     def test_millions_of_users_boosts_score(self):
         """Stories affecting millions of users should score high."""
@@ -29,8 +29,8 @@ class TestImpactScoring:
             story_type=StoryType.BREACH,
         )
         score = calculate_impact_score(story)
-        # 50 million users = 25 + BREACH = 10 = 35
-        assert score >= 35
+        # 50 million users = 60 + BREACH = 10 = 70
+        assert score >= 70
 
     def test_tier1_vendor_boosts_score(self):
         """Stories mentioning Tier 1 vendors should score higher."""
@@ -41,8 +41,8 @@ class TestImpactScoring:
             story_type=StoryType.VULNERABILITY,
         )
         score = calculate_impact_score(story)
-        # Microsoft = 20, VULNERABILITY gets no type boost
-        assert score >= 20
+        # Microsoft = 60, VULNERABILITY gets no type boost
+        assert score >= 60
 
     def test_nation_state_attribution_boosts_score(self):
         """APT/nation-state stories should score high."""
@@ -53,8 +53,8 @@ class TestImpactScoring:
             story_type=StoryType.APT,
         )
         score = calculate_impact_score(story)
-        # China-linked = 25 + APT type = 15 = 40
-        assert score >= 40
+        # China-linked = 60 + APT type = 15 = 75
+        assert score >= 75
 
     def test_small_regional_story_scores_low(self):
         """Small regional stories without scale indicators should score low."""

@@ -31,8 +31,8 @@ def calculate_impact_score(story: Story) -> float:
 
     # Dollar amounts (millions+)
     money_patterns = [
-        (r'\$\d+(?:\.\d+)?\s*(?:MILLION|M\b)', 30),   # $X million
-        (r'\$\d+(?:\.\d+)?\s*(?:BILLION|B\b)', 50),   # $X billion
+        (r'\$\d+(?:\.\d+)?\s*(?:MILLION|M\b)', 50),   # $X million
+        (r'\$\d+(?:\.\d+)?\s*(?:BILLION|B\b)', 70),   # $X billion
         (r'MILLIONS?\s+(?:OF\s+)?(?:DOLLARS|USD)', 25),
     ]
     for pattern, points in money_patterns:
@@ -42,7 +42,7 @@ def calculate_impact_score(story: Story) -> float:
 
     # User counts
     user_patterns = [
-        (r'(?:MILLIONS?\s+(?:OF\s+)?(?:\w+\s+)*USERS?|OVER\s+\d+\s*M(?:ILLION)?\s+USERS?)', 25),
+        (r'(?:MILLIONS?\s+(?:OF\s+)?(?:\w+\s+)*USERS?|OVER\s+\d+\s*M(?:ILLION)?\s+USERS?)', 60),
         (r'(?:THOUSANDS?\s+(?:OF\s+)?(?:\w+\s+)*USERS?|OVER\s+\d+K?\s+USERS?)', 10),
         (r'WIDESPREAD|MASSIVE|GLOBAL', 15),
     ]
@@ -55,7 +55,7 @@ def calculate_impact_score(story: Story) -> float:
     tier1_found = False
     for vendor in TIER_1:
         if vendor in text:
-            score += 20
+            score += 60
             tier1_found = True
             break
 
@@ -75,7 +75,7 @@ def calculate_impact_score(story: Story) -> float:
     ]
     for pattern in apt_patterns:
         if re.search(pattern, text):
-            score += 25
+            score += 60
             break
 
     # Supply chain
