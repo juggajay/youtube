@@ -145,3 +145,68 @@ class TestProductFallback:
         priority = apply_priority_matrix(vuln)
         # Product contains Microsoft, should be treated as tier 1
         assert priority == Priority.CRITICAL
+
+
+class TestMinimumContentGuarantee:
+    """Test that filter ensures minimum content for episodes."""
+
+    def test_minimum_3_vulns_when_only_tier4(self):
+        """Even if all vulns are Tier 4, should include top 3 by raw CVSS."""
+        from src.pipeline.filter_score import filter_vulnerabilities
+        from src.ingest.models import Vulnerability
+
+        vulns = [
+            Vulnerability(cve_id=f"CVE-2025-000{i}", cvss_score=9.5 - (i * 0.1),
+                         epss_score=0.15, vendor="Akuvox", product=f"Product{i}")
+            for i in range(5)
+        ]
+
+        included, filtered = filter_vulnerabilities(vulns)
+        assert len(included) >= 3
+
+    def test_fallback_vulns_marked_in_logs(self, caplog):
+        """Fallback vulns should be logged for tuning."""
+        import logging
+        caplog.set_level(logging.INFO)
+
+        from src.pipeline.filter_score import filter_vulnerabilities
+        from src.ingest.models import Vulnerability
+
+        vulns = [
+            Vulnerability(cve_id="CVE-2025-0001", cvss_score=9.5,
+                         epss_score=0.15, vendor="UnknownVendor", product="Thing")
+        ]
+
+        filter_vulnerabilities(vulns)
+        assert any("fallback" in record.message.lower() for record in caplog.records)
+
+    def test_no_fallback_when_enough_content(self):
+        """No fallback needed when tier filtering produces enough content."""
+        from src.pipeline.filter_score import filter_vulnerabilities
+        from src.ingest.models import Vulnerability
+
+        vulns = [
+            Vulnerability(cve_id=f"CVE-2025-000{i}", cvss_score=9.5,
+                         epss_score=0.15, vendor="Microsoft", product="Exchange")
+            for i in range(5)
+        ]
+
+        included, filtered = filter_vulnerabilities(vulns)
+        assert len(included) == 5
+
+    def test_kev_counts_toward_minimum(self):
+        """KEV vulns should count toward minimum content."""
+        from src.pipeline.filter_score import filter_vulnerabilities
+        from src.ingest.models import Vulnerability
+
+        vulns = [
+            Vulnerability(cve_id="CVE-2025-0001", cvss_score=7.0,
+                         epss_score=0.05, vendor="TinyVendor", cisa_kev=True),
+            Vulnerability(cve_id="CVE-2025-0002", cvss_score=7.5,
+                         epss_score=0.05, vendor="SmallCo", cisa_kev=True),
+            Vulnerability(cve_id="CVE-2025-0003", cvss_score=9.0,
+                         epss_score=0.15, vendor="Unknown", cisa_kev=False),
+        ]
+
+        included, filtered = filter_vulnerabilities(vulns)
+        assert len(included) >= 3

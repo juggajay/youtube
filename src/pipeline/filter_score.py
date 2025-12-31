@@ -19,6 +19,10 @@ from .vendor_tiers import get_vendor_tier, get_tier_weight
 
 logger = get_logger(__name__)
 
+# Minimum content guarantee constants
+MIN_VULNERABILITIES = 3
+FALLBACK_PRIORITY = Priority.HIGH
+
 
 def apply_priority_matrix(vuln: Vulnerability) -> Priority:
     """
@@ -104,13 +108,19 @@ def apply_priority_matrix(vuln: Vulnerability) -> Priority:
 
 
 def filter_vulnerabilities(
-    vulns: List[Vulnerability]
+    vulns: List[Vulnerability],
+    min_content: int = MIN_VULNERABILITIES,
 ) -> Tuple[List[Vulnerability], List[Vulnerability]]:
     """
     Apply Priority Matrix to all vulnerabilities.
 
+    Includes minimum content guarantee: if tier-weighted filtering produces
+    fewer than min_content vulnerabilities, backfills from filtered pool
+    by raw CVSS score (highest first).
+
     Args:
         vulns: List of all ingested vulnerabilities
+        min_content: Minimum number of vulnerabilities to include (default: 3)
 
     Returns:
         Tuple of (included, filtered) vulnerability lists
@@ -126,6 +136,32 @@ def filter_vulnerabilities(
         else:
             filtered.append(vuln)
 
+    # Minimum content guarantee: backfill from filtered pool if needed
+    fallback_count = 0
+    if len(included) < min_content and filtered:
+        # Sort filtered by raw CVSS (highest first) for fallback selection
+        filtered.sort(key=lambda v: (-v.cvss_score, -v.epss_score))
+
+        needed = min_content - len(included)
+        logger.warning(
+            f"FALLBACK TRIGGERED: Only {len(included)} vulns passed tier filtering, "
+            f"need {needed} more to meet minimum of {min_content}"
+        )
+
+        for vuln in filtered[:needed]:
+            # Mark as fallback for analytics/tuning
+            vuln._is_fallback = True
+            vuln.priority = FALLBACK_PRIORITY
+            included.append(vuln)
+            fallback_count += 1
+            logger.info(
+                f"FALLBACK: Including {vuln.cve_id} "
+                f"(raw CVSS {vuln.cvss_score:.1f}, vendor={vuln.vendor})"
+            )
+
+        # Remove fallback vulns from filtered list
+        filtered = filtered[needed:]
+
     # Sort by priority (CRITICAL first) then by CVSS score descending
     included.sort(key=lambda v: (
         0 if v.priority == Priority.CRITICAL else 1,
@@ -136,7 +172,8 @@ def filter_vulnerabilities(
     logger.info(
         f"Priority Matrix: {len(included)} included "
         f"({sum(1 for v in included if v.priority == Priority.CRITICAL)} critical, "
-        f"{sum(1 for v in included if v.priority == Priority.HIGH)} high), "
+        f"{sum(1 for v in included if v.priority == Priority.HIGH)} high"
+        f"{f', {fallback_count} fallback' if fallback_count else ''}), "
         f"{len(filtered)} filtered out"
     )
 
