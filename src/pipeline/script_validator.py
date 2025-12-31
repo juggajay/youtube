@@ -469,8 +469,19 @@ SCRIPT TO REVIEW:
 """
 
 
-def run_llm_validation(script: dict) -> Dict:
-    """Send script to LLM for hallucination detection."""
+def run_llm_validation(script: dict, input_data: dict = None) -> Dict:
+    """
+    Send script to LLM for hallucination detection.
+
+    Args:
+        script: The episode script to validate
+        input_data: Optional source data (daily_brief_packet) for V2 validation.
+                   When provided, uses V2 prompt which only checks against source.
+                   When None, falls back to V1 behavior (deprecated).
+
+    Returns:
+        Dict with issues_found, issues list, and summary
+    """
 
     try:
         import google.generativeai as genai
@@ -491,7 +502,19 @@ def run_llm_validation(script: dict) -> Dict:
         for line in script.get("dialogue", [])
     ])
 
-    full_prompt = LLM_VALIDATION_PROMPT + dialogue_text
+    # Use V2 prompt if source data is provided (recommended)
+    if input_data:
+        # Format source data for the prompt
+        source_data_text = json.dumps(input_data, indent=2, default=str)
+        full_prompt = LLM_VALIDATION_PROMPT_V2.format(
+            source_data=source_data_text,
+            script_text=dialogue_text
+        )
+        logger.info("Using V2 validation prompt (source-grounded)")
+    else:
+        # Fall back to V1 (deprecated - may flag legitimate products)
+        logger.warning("No input_data provided, using deprecated V1 prompt")
+        full_prompt = LLM_VALIDATION_PROMPT + dialogue_text
 
     try:
         genai.configure(api_key=api_key)
@@ -743,7 +766,7 @@ def validate_script(
     # Layer 2: LLM validation
     if use_llm:
         logger.info("Layer 2: LLM validation...")
-        llm_result = run_llm_validation(script)
+        llm_result = run_llm_validation(script, input_data=input_data)
 
         if llm_result.get("issues_found"):
             report["llm_issues"] = llm_result.get("issues", [])

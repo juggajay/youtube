@@ -248,12 +248,22 @@ def run_pipeline(
             with open(daily_brief_path) as f:
                 input_data = json.load(f)
 
+        # Also load stories for cross-checking names/facts
+        news_path = output_dir / "raw_news.json"
+        if news_path.exists() and input_data:
+            with open(news_path) as f:
+                news_data = json.load(f)
+            # Add stories to input_data for validation cross-check
+            input_data["stories"] = news_data.get("stories", [])
+
         # Validate and fix in a loop
+        # V2 prompt grounds LLM validation against source data only,
+        # preventing false positives on unfamiliar product names
         script, validation_passed, validation_report = validate_and_fix(
             script,
             input_data=input_data,
             max_attempts=2,
-            use_llm=True
+            use_llm=True  # Using V2 source-grounded validation
         )
 
         results["steps"]["validation"] = {
