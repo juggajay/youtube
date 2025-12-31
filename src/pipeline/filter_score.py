@@ -15,6 +15,7 @@ from typing import List, Tuple
 
 from ..ingest.models import Vulnerability, Priority
 from ..utils import get_config, get_logger
+from .vendor_tiers import get_vendor_tier, get_tier_weight
 
 logger = get_logger(__name__)
 
@@ -25,6 +26,12 @@ def apply_priority_matrix(vuln: Vulnerability) -> Priority:
 
     This logic is IMMUTABLE and runs before any LLM processing.
     The LLM never sees FILTERED vulnerabilities.
+
+    Vendor tier weighting is applied to CVSS scores:
+    - Tier 1 (Microsoft, Google, etc.): weight 1.0 (full score)
+    - Tier 2 (Fortinet, Palo Alto, etc.): weight 0.8
+    - Tier 3 (WordPress, Apache, etc.): weight 0.6
+    - Tier 4 (unknown vendors): weight 0.3
 
     Args:
         vuln: Vulnerability object with scores populated
@@ -39,37 +46,60 @@ def apply_priority_matrix(vuln: Vulnerability) -> Priority:
     high = thresholds.get("high", {"cvss_min": 7.0, "epss_min": 0.30})
 
     # Rule 1: CISA KEV is always CRITICAL (actively exploited in the wild)
+    # This bypasses tier weighting - if it's being exploited, we cover it
     if vuln.cisa_kev:
+        vendor_tier = get_vendor_tier(vuln.vendor)
         logger.info(f"{vuln.cve_id}: CRITICAL (CISA KEV listed)")
-        _log_filter_decision(vuln, Priority.CRITICAL, "CISA KEV")
+        _log_filter_decision(vuln, Priority.CRITICAL, "CISA KEV", vendor_tier)
         return Priority.CRITICAL
 
+    # Determine vendor tier - check product name as fallback for tier 4
+    vendor_tier = get_vendor_tier(vuln.vendor)
+    if vendor_tier == 4 and vuln.product:
+        # If vendor is unknown, check if product name contains a known vendor
+        product_tier = get_vendor_tier(vuln.product)
+        if product_tier < 4:
+            vendor_tier = product_tier
+            logger.debug(
+                f"{vuln.cve_id}: Using product-based tier {vendor_tier} "
+                f"(product: {vuln.product})"
+            )
+
+    # Calculate effective CVSS with tier weighting
+    tier_weight = get_tier_weight(vendor_tier)
+    effective_cvss = vuln.cvss_score * tier_weight
+
+    logger.debug(
+        f"{vuln.cve_id}: tier={vendor_tier}, weight={tier_weight}, "
+        f"raw_cvss={vuln.cvss_score:.1f}, effective_cvss={effective_cvss:.1f}"
+    )
+
     # Rule 2: Very high severity + reasonable exploit probability
-    if vuln.cvss_score > critical["cvss_min"] and vuln.epss_score > critical["epss_min"]:
+    if effective_cvss > critical["cvss_min"] and vuln.epss_score > critical["epss_min"]:
         logger.info(
             f"{vuln.cve_id}: CRITICAL "
-            f"(CVSS {vuln.cvss_score:.1f} > {critical['cvss_min']} + "
-            f"EPSS {vuln.epss_score:.2%} > {critical['epss_min']:.0%})"
+            f"(effective CVSS {effective_cvss:.1f} > {critical['cvss_min']} + "
+            f"EPSS {vuln.epss_score:.2%} > {critical['epss_min']:.0%}, tier={vendor_tier})"
         )
-        _log_filter_decision(vuln, Priority.CRITICAL, "CVSS+EPSS threshold")
+        _log_filter_decision(vuln, Priority.CRITICAL, "CVSS+EPSS threshold", vendor_tier)
         return Priority.CRITICAL
 
     # Rule 3: High severity + high exploit probability
-    if vuln.cvss_score > high["cvss_min"] and vuln.epss_score > high["epss_min"]:
+    if effective_cvss > high["cvss_min"] and vuln.epss_score > high["epss_min"]:
         logger.info(
             f"{vuln.cve_id}: HIGH "
-            f"(CVSS {vuln.cvss_score:.1f} > {high['cvss_min']} + "
-            f"EPSS {vuln.epss_score:.2%} > {high['epss_min']:.0%})"
+            f"(effective CVSS {effective_cvss:.1f} > {high['cvss_min']} + "
+            f"EPSS {vuln.epss_score:.2%} > {high['epss_min']:.0%}, tier={vendor_tier})"
         )
-        _log_filter_decision(vuln, Priority.HIGH, "CVSS+EPSS threshold")
+        _log_filter_decision(vuln, Priority.HIGH, "CVSS+EPSS threshold", vendor_tier)
         return Priority.HIGH
 
     # Rule 4: Everything else is filtered out
     logger.debug(
         f"{vuln.cve_id}: FILTERED "
-        f"(CVSS {vuln.cvss_score:.1f}, EPSS {vuln.epss_score:.2%})"
+        f"(effective CVSS {effective_cvss:.1f}, EPSS {vuln.epss_score:.2%}, tier={vendor_tier})"
     )
-    _log_filter_decision(vuln, Priority.FILTERED, "Below thresholds")
+    _log_filter_decision(vuln, Priority.FILTERED, "Below thresholds", vendor_tier)
     return Priority.FILTERED
 
 
@@ -113,16 +143,32 @@ def filter_vulnerabilities(
     return included, filtered
 
 
-def _log_filter_decision(vuln: Vulnerability, priority: Priority, reason: str) -> None:
+def _log_filter_decision(
+    vuln: Vulnerability,
+    priority: Priority,
+    reason: str,
+    vendor_tier: int = 4,
+) -> None:
     """
     Log filter decision for analytics.
 
     These logs can be analyzed to tune thresholds if too many episodes are nuked.
+
+    Args:
+        vuln: The vulnerability being evaluated
+        priority: The resulting priority level
+        reason: Human-readable reason for the decision
+        vendor_tier: The vendor tier (1-4) used in weighting
     """
+    tier_weight = get_tier_weight(vendor_tier)
+    effective_cvss = vuln.cvss_score * tier_weight
+
     logger.debug(
         f"FILTER_DECISION | "
         f"cve={vuln.cve_id} | "
         f"cvss={vuln.cvss_score:.1f} | "
+        f"effective_cvss={effective_cvss:.1f} | "
+        f"tier={vendor_tier} | "
         f"epss={vuln.epss_score:.4f} | "
         f"kev={vuln.cisa_kev} | "
         f"result={priority.value} | "
