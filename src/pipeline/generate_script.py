@@ -332,11 +332,11 @@ Example:
 
 **OUTRO - Signature Sign-off (~15 sec):**
 - Alex gives final priority/action
-- Morgan does CTA: "If this saved you time, subscribe and hit the bell - we're here every morning."
+- Morgan does CTA with AI disclosure: "Your daily AI-powered security briefing. If this saved you time, subscribe - we're here every morning."
 - Alex delivers sign-off: "Stay patched, stay paranoid."
 
 ALWAYS end with this exact exchange:
-> Morgan: "If this saved you time, subscribe and hit the bell - we're here every morning."
+> Morgan: "Your daily AI-powered security briefing. If this saved you time, subscribe - we're here every morning."
 > Alex: "Stay patched, stay paranoid."
 
 ## MORGAN'S CONTRIBUTIONS (CRITICAL)

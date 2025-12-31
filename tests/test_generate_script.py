@@ -28,3 +28,25 @@ class TestSystemPromptContent:
             "disclosure queue",
             "fresh intel",
         ])
+
+
+class TestAIDisclosure:
+    """Test AI disclosure in scripts."""
+
+    def test_prompt_includes_ai_disclosure_instruction(self):
+        """Prompt should instruct to include AI disclosure."""
+        from src.pipeline.generate_script import SYSTEM_PROMPT
+        prompt_lower = SYSTEM_PROMPT.lower()
+        assert any(phrase in prompt_lower for phrase in [
+            "ai-powered",
+            "ai-generated",
+            "automated",
+            "artificial intelligence",
+        ])
+
+    def test_prompt_outro_mentions_ai(self):
+        """Outro section should include AI mention."""
+        from src.pipeline.generate_script import SYSTEM_PROMPT
+        # Find the OUTRO section
+        outro_section = SYSTEM_PROMPT.split("OUTRO")[1] if "OUTRO" in SYSTEM_PROMPT else ""
+        assert "ai" in outro_section.lower() or "automated" in outro_section.lower()
