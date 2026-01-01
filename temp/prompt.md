@@ -164,4 +164,4 @@ Which vulnerabilities got cut (should be the obscure ones)
 Whether the top story selection matches what a human editor would choose
 Whether the thumbnail text is compelling
 
-Also manually review 2-3 generated scripts before re-enabling auto-publish to verify the changes work as intended.
+Also manually review 2-3 generated scripts before re-enabling auto-publish to verify the changes work as intended

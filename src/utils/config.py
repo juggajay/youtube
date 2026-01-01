@@ -39,7 +39,6 @@ def load_config(config_path: Optional[str] = None) -> dict:
 
     # Inject environment variables
     _config["env"] = {
-        "wondercraft_api_key": os.getenv("WONDERCRAFT_API_KEY"),
         "elevenlabs_api_key": os.getenv("ELEVENLABS_API_KEY"),
         "anthropic_api_key": os.getenv("ANTHROPIC_API_KEY"),
         "gemini_api_key": os.getenv("GEMINI_API_KEY"),

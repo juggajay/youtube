@@ -7,17 +7,29 @@ episode:
   publish_time: "07:00"  # Target publish time (local)
 
 # Voice personas (ElevenLabs V3)
+# Keys must match speaker names used in script (lowercase)
 voices:
-  alec:
-    name: "Alec"
+  alex:
+    name: "Alex"
     role: "Security Analyst Expert"
     voice_id: "1SM7GgM6IMuvQlz2BwM3"  # Male voice
     color: "0x00FFFF"  # Cyan
+  morgan:
+    name: "Morgan"
+    role: "Co-host / Tech Journalist"
+    voice_id: "tnSpp4vdxKPjI9w0GnoV"  # Female voice
+    color: "0xFF6600"  # Orange
+  # Legacy names (if any scripts still use these)
+  alec:
+    name: "Alec"
+    role: "Security Analyst Expert"
+    voice_id: "1SM7GgM6IMuvQlz2BwM3"
+    color: "0x00FFFF"
   melody:
     name: "Melody"
     role: "Host / Tech Journalist"
-    voice_id: "tnSpp4vdxKPjI9w0GnoV"  # Female voice
-    color: "0xFF6600"  # Orange
+    voice_id: "tnSpp4vdxKPjI9w0GnoV"
+    color: "0xFF6600"
 
 # Wondercraft voices (primary - more natural podcast audio)
 # Get voice IDs from: https://app.wondercraft.ai (copy from voice selector)
@@ -79,7 +91,7 @@ publish:
     enabled: true
     playlist_name: "Daily Security Brief"  # Auto-creates if doesn't exist
     category_id: "28"  # Science & Technology
-    privacy_status: "public"  # public, private, unlisted
+    privacy_status: "unlisted"  # public, private, unlisted
 
   # RSS/Podcast feed settings
   rss:

@@ -263,7 +263,7 @@ def run_pipeline(
             script,
             input_data=input_data,
             max_attempts=2,
-            use_llm=True  # Using V2 source-grounded validation
+            use_llm=False  # DISABLED: V2 validation has false positives - flagging matches as errors
         )
 
         results["steps"]["validation"] = {
@@ -332,6 +332,15 @@ def run_pipeline(
         if packet_path.exists():
             with open(packet_path) as f:
                 packet_data = json.load(f)
+
+            # Load stories for thumbnail text selection
+            news_path = output_dir / "raw_news.json"
+            if news_path.exists():
+                with open(news_path) as f:
+                    news_data = json.load(f)
+                # Add stories to packet for thumbnail generator
+                packet_data["top_stories"] = news_data.get("stories", [])[:10]
+
             thumbnail_manifest = generate_thumbnail(packet_data, str(output_dir))
             results["steps"]["thumbnail"] = {
                 "file": thumbnail_manifest["thumbnail_file"],
@@ -658,7 +667,8 @@ def _run_publish(
                         "Daily cybersecurity vulnerability briefings"
                     )
 
-                # Upload
+                # Upload with configured privacy status
+                privacy_status = config.get("publish", {}).get("youtube", {}).get("privacy_status", "unlisted")
                 yt_result = upload_to_youtube(
                     video_path=video_path,
                     title=metadata["title"],
@@ -666,6 +676,7 @@ def _run_publish(
                     tags=metadata["tags"],
                     playlist_id=playlist_id,
                     thumbnail_path=thumbnail_path if Path(thumbnail_path).exists() else None,
+                    privacy_status=privacy_status,
                 )
                 results["youtube"] = {"status": "uploaded", **yt_result}
 

@@ -224,24 +224,46 @@ def _extract_dollar_amount(text: str) -> str:
 def _format_story_text(story_dict: dict) -> str:
     """Format story into compelling thumbnail text."""
     title = story_dict.get("title", "")
+    summary = story_dict.get("summary", "")
     title_upper = title.upper()
+    full_text = title + " " + summary
 
-    # Priority 1: Include dollar amounts
-    dollar_amount = _extract_dollar_amount(title)
+    # Priority 1: Dollar amounts - most click-worthy
+    # Format: "$8.5M STOLEN" or "TRUST WALLET $8.5M"
+    dollar_amount = _extract_dollar_amount(full_text)
     if dollar_amount:
-        # Try to extract company/entity name
-        words = title.split()
-        entity = ""
-        for word in words:
-            clean_word = word.upper().strip(",:;")
-            if clean_word and not clean_word.startswith("$") and clean_word not in [
-                "LOSES", "LOST", "STOLEN", "HACK", "BREACH", "ATTACK", "IN", "THE", "A"
-            ]:
-                entity = clean_word
-                break
-        if entity:
-            return f"{entity} {dollar_amount}"
-        return f"{dollar_amount} BREACH"
+        # Normalize to compact format: "$8.5M" not "$8.5 MILLION"
+        compact_dollar = dollar_amount.replace(" MILLION", "M").replace(" BILLION", "B")
+        compact_dollar = compact_dollar.replace("MILLION", "M").replace("BILLION", "B")
+
+        # Check for known company names in title
+        known_companies = [
+            "TRUST WALLET", "COINBASE", "BINANCE", "OPENSEA", "METAMASK",
+            "UBER", "TWITTER", "FACEBOOK", "INSTAGRAM", "WHATSAPP",
+            "DISNEY", "SONY", "MICROSOFT", "APPLE", "GOOGLE", "AMAZON",
+        ]
+        for company in known_companies:
+            if company in title_upper:
+                return f"{company} {compact_dollar}"
+
+        # Check for action words to create compelling text
+        if "STOLEN" in title_upper or "DRAIN" in title_upper or "HACK" in title_upper:
+            return f"{compact_dollar} STOLEN"
+        elif "LOST" in title_upper or "LOSES" in title_upper:
+            return f"{compact_dollar} LOST"
+        elif "BREACH" in title_upper:
+            return f"{compact_dollar} BREACH"
+        elif "FINE" in title_upper or "PENALTY" in title_upper or "SETTLE" in title_upper:
+            return f"{compact_dollar} FINE"
+        else:
+            # Generic: try to get first word as entity
+            words = title.split()
+            for word in words:
+                clean = word.upper().strip(",:;'\"")
+                if clean and len(clean) > 2 and not clean.startswith("$"):
+                    if clean not in ["THE", "AND", "FOR", "WITH", "FROM", "AFTER"]:
+                        return f"{clean} {compact_dollar}"
+            return f"{compact_dollar} BREACH"
 
     # Priority 2: Check for Tier 1 vendor mentions
     for vendor in TIER_1:
@@ -255,8 +277,9 @@ def _format_story_text(story_dict: dict) -> str:
         (r'(CHINA)[\s-]?(?:LINKED|NEXUS|BACKED)', 'CHINA-LINKED'),
         (r'(RUSSIA)[\s-]?(?:LINKED|NEXUS|BACKED)', 'RUSSIA-LINKED'),
         (r'(IRAN)[\s-]?(?:LINKED|NEXUS|BACKED)', 'IRAN-LINKED'),
+        (r'(NORTH\s*KOREA)[\s-]?(?:LINKED|NEXUS|BACKED)', 'DPRK-LINKED'),
         (r'(APT\d+)', None),  # Use matched group directly
-        (r'(VOLT\s*TYPHOON|FANCY\s*BEAR|LAZARUS)', None),
+        (r'(VOLT\s*TYPHOON|FANCY\s*BEAR|LAZARUS|SANDWORM)', None),
     ]
     for pattern, replacement in apt_patterns:
         match = re.search(pattern, title_upper)
@@ -279,9 +302,13 @@ def _format_story_text(story_dict: dict) -> str:
     return " ".join(words).upper()
 
 
-def _format_vuln_text(vuln: dict) -> tuple:
+def _format_vuln_text(vuln: dict, force_red: bool = False) -> tuple:
     """
     Format vulnerability into thumbnail text with color.
+
+    Args:
+        vuln: Vulnerability dict
+        force_red: Force red color (e.g., CISA KEV in episode)
 
     Returns:
         (text, hex_color)
@@ -289,6 +316,7 @@ def _format_vuln_text(vuln: dict) -> tuple:
     vendor = vuln.get("vendor", "").upper().strip()
     product = vuln.get("product", "").upper().strip()
     cvss = vuln.get("cvss_score", 0)
+    is_kev = vuln.get("cisa_kev", False)
 
     # Prefer vendor, fall back to product
     name = vendor if vendor else product
@@ -309,7 +337,10 @@ def _format_vuln_text(vuln: dict) -> tuple:
         name = "VULNERABILITY"
 
     # Determine severity label and color
-    if cvss >= 9.0:
+    # CISA KEV or force_red always = red
+    if is_kev or force_red:
+        return f"{name} CRITICAL", "#FF0000"
+    elif cvss >= 9.0:
         return f"{name} CRITICAL", "#FF0000"
     elif cvss >= 7.0:
         return f"{name} HIGH RISK", "#FFD700"
@@ -323,36 +354,63 @@ def determine_text(daily_brief: dict) -> tuple:
     """
     Returns (text, hex_color) based on highest-impact content.
 
-    Logic:
-    1. Score all vulnerabilities (CVSS * tier_weight)
-    2. Score all stories using calculate_impact_score
-    3. Compare highest vuln score vs highest story score
-    4. Winner determines the thumbnail text
-    5. Fall back to counts or "DAILY INTEL" if nothing compelling
+    Priority order:
+    1. Stories with dollar amounts (e.g., "$8.5M STOLEN") - always red
+    2. CISA KEV vulnerabilities - always red
+    3. Tier 1 vendor critical vulns - red
+    4. Other high-impact stories (APT, major breaches) - red
+    5. High severity vulns - yellow
+    6. Count fallbacks - red/yellow based on severity
+    7. "DAILY INTEL" - cyan (quiet day)
 
-    Examples:
-    - "$8.5M BREACH" (red) - high-impact story
-    - "MICROSOFT CRITICAL" (red) - Tier 1 critical vuln
-    - "CHINA-LINKED THREAT" (red) - APT story
-    - "5 CRITICAL" (red) - fallback to counts
-    - "DAILY INTEL" (cyan) - quiet day
+    Color rules:
+    - Red (#FF0000): CISA KEV, CVSS 9.0+, major breaches, dollar amounts
+    - Yellow (#FFD700): CVSS 7.0-8.9, high risk
+    - Cyan (#00FFFF): Quiet day fallback
     """
     vulns = daily_brief.get("vulnerabilities", [])
     stories = daily_brief.get("top_stories", [])
 
+    # --- Check for CISA KEV (forces red for entire episode) ---
+    has_kev = any(vuln.get("cisa_kev", False) for vuln in vulns)
+
+    # --- Priority 1: Stories with dollar amounts ---
+    # Dollar amounts are the most click-worthy - "$8.5M STOLEN" beats everything
+    best_dollar_story = None
+    best_dollar_amount = ""
+    for story_dict in stories:
+        if not isinstance(story_dict, dict):
+            continue
+        title = story_dict.get("title", "")
+        summary = story_dict.get("summary", "")
+        dollar = _extract_dollar_amount(title + " " + summary)
+        if dollar:
+            # Prefer larger amounts (rough heuristic: longer string = bigger number)
+            if not best_dollar_amount or len(dollar) > len(best_dollar_amount):
+                best_dollar_amount = dollar
+                best_dollar_story = story_dict
+
+    if best_dollar_story:
+        text = _format_story_text(best_dollar_story)
+        return text, "#FF0000"  # Dollar amounts always red
+
+    # --- Priority 2: CISA KEV vulnerability ---
+    for vuln in vulns:
+        if vuln.get("cisa_kev", False):
+            return _format_vuln_text(vuln, force_red=True)
+
+    # --- Priority 3: Score remaining vulns and stories ---
     best_vuln_score = 0
     best_vuln = None
     best_story_score = 0
     best_story = None
 
-    # --- Score vulnerabilities ---
     for vuln in vulns:
         score = _calculate_vuln_score(vuln)
         if score > best_vuln_score:
             best_vuln_score = score
             best_vuln = vuln
 
-    # --- Score stories ---
     for story_dict in stories:
         if not isinstance(story_dict, dict):
             continue
@@ -364,13 +422,15 @@ def determine_text(daily_brief: dict) -> tuple:
 
     # --- Compare and pick winner ---
     if best_vuln_score > 0 or best_story_score > 0:
-        if best_vuln_score >= best_story_score and best_vuln:
-            # Vulnerability wins
-            return _format_vuln_text(best_vuln)
-        elif best_story:
+        # Stories need to beat vulns by a margin to win (vulns are core content)
+        # But APT/breach stories should still beat generic vulns
+        if best_story_score > best_vuln_score and best_story:
             # Story wins
             text = _format_story_text(best_story)
             return text, "#FF0000"  # Stories are always red (high urgency)
+        elif best_vuln:
+            # Vulnerability wins
+            return _format_vuln_text(best_vuln, force_red=has_kev)
 
     # --- Fallback: counts ---
     stats = daily_brief.get("filter_stats", {})
