@@ -91,7 +91,7 @@ publish:
     enabled: true
     playlist_name: "Daily Security Brief"  # Auto-creates if doesn't exist
     category_id: "28"  # Science & Technology
-    privacy_status: "unlisted"  # public, private, unlisted
+    privacy_status: "public"  # public, private, unlisted
 
   # RSS/Podcast feed settings
   rss:

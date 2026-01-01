@@ -64,8 +64,8 @@ def generate_youtube_metadata(
         return _generate_mock_metadata(daily_brief)
 
     # Add host branding if missing
-    if "Alec" not in metadata.get("description", "") and "Melody" not in metadata.get("description", ""):
-        metadata["description"] += "\n\nHosted by AI Analysts Alec & Melody."
+    if "Alex" not in metadata.get("description", "") and "Morgan" not in metadata.get("description", ""):
+        metadata["description"] += "\n\nHosted by AI Analysts Alex & Morgan."
 
     return metadata
 
@@ -159,7 +159,7 @@ def _generate_mock_metadata(daily_brief: dict) -> dict:
         "",
         "Subscribe for daily security updates.",
         "",
-        "Hosted by AI Analysts Alec & Melody.",
+        "Hosted by AI Analysts Alex & Morgan.",
     ])
 
     # Generate tags

@@ -221,6 +221,42 @@ def _extract_dollar_amount(text: str) -> str:
     return ""
 
 
+def _is_breach_or_loss_story(title: str, summary: str) -> bool:
+    """
+    Check if a story is about a breach, theft, or financial loss.
+
+    Returns True for: breaches, hacks, theft, ransoms, fraud, fines
+    Returns False for: discounts, savings, free offers, prices, costs
+    """
+    text_upper = (title + " " + summary).upper()
+
+    # Negative keywords - these indicate it's NOT a breach/loss story
+    # Skip stories about discounts, savings, promotions
+    negative_keywords = [
+        "SAVE", "SAVING", "SAVINGS", "DISCOUNT", "FREE MONTH", "FREE TRIAL",
+        "OFFER", "DEAL", "CANCEL", "SUBSCRIPTION", "PRICE", "PRICING",
+        "COST", "COSTS", "WORTH", "VALUE", "BUDGET", "AFFORDABLE",
+    ]
+    for keyword in negative_keywords:
+        if keyword in text_upper:
+            return False
+
+    # Positive keywords - these indicate it IS a breach/loss story
+    positive_keywords = [
+        "STOLEN", "THEFT", "BREACH", "HACK", "HACKED", "ATTACK",
+        "LOST", "LOSS", "LOSES", "DRAIN", "DRAINED", "RANSOM",
+        "RANSOMWARE", "FRAUD", "HEIST", "COMPROMISE", "COMPROMISED",
+        "FINE", "FINED", "PENALTY", "SETTLEMENT", "SUED", "LAWSUIT",
+        "LEAK", "LEAKED", "EXPOSED", "EXTORT", "VICTIM",
+    ]
+    for keyword in positive_keywords:
+        if keyword in text_upper:
+            return True
+
+    # Default: if no clear signal, don't prioritize
+    return False
+
+
 def _format_story_text(story_dict: dict) -> str:
     """Format story into compelling thumbnail text."""
     title = story_dict.get("title", "")
@@ -374,8 +410,8 @@ def determine_text(daily_brief: dict) -> tuple:
     # --- Check for CISA KEV (forces red for entire episode) ---
     has_kev = any(vuln.get("cisa_kev", False) for vuln in vulns)
 
-    # --- Priority 1: Stories with dollar amounts ---
-    # Dollar amounts are the most click-worthy - "$8.5M STOLEN" beats everything
+    # --- Priority 1: Stories with dollar amounts from BREACHES/THEFTS only ---
+    # "$8.5M STOLEN" is click-worthy, but "$20 savings" is not
     best_dollar_story = None
     best_dollar_amount = ""
     for story_dict in stories:
@@ -383,6 +419,11 @@ def determine_text(daily_brief: dict) -> tuple:
             continue
         title = story_dict.get("title", "")
         summary = story_dict.get("summary", "")
+
+        # Only consider dollar amounts from breach/theft/loss stories
+        if not _is_breach_or_loss_story(title, summary):
+            continue
+
         dollar = _extract_dollar_amount(title + " " + summary)
         if dollar:
             # Prefer larger amounts (rough heuristic: longer string = bigger number)
@@ -392,7 +433,7 @@ def determine_text(daily_brief: dict) -> tuple:
 
     if best_dollar_story:
         text = _format_story_text(best_dollar_story)
-        return text, "#FF0000"  # Dollar amounts always red
+        return text, "#FF0000"  # Breach dollar amounts always red
 
     # --- Priority 2: CISA KEV vulnerability ---
     for vuln in vulns:

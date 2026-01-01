@@ -426,7 +426,7 @@ def _generate_simple_metadata(
         "Subscribe for daily cybersecurity updates.",
         "Covering CVEs, patches, breaches, and threat intel.",
         "",
-        "Hosted by AI Analysts Alec & Melody.",
+        "Hosted by AI Analysts Alex & Morgan.",
         "",
         "#cybersecurity #infosec #vulnerabilities #cve #patching",
     ])
