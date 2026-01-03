@@ -169,6 +169,7 @@ def _calculate_vuln_score(vuln: dict) -> float:
     Factors:
     - CVSS score (0-10, scaled to 0-100)
     - Vendor tier weight multiplier
+    - Critical severity boost (CVSS 9.0+ gets minimum 0.7 weight)
 
     Returns:
         Score 0-100
@@ -176,13 +177,24 @@ def _calculate_vuln_score(vuln: dict) -> float:
     cvss = vuln.get("cvss_score", 0)
     vendor = vuln.get("vendor", "")
     product = vuln.get("product", "")
+    title = vuln.get("title", "")
+    description = vuln.get("description", "")
 
-    # Get vendor tier (check both vendor and product)
+    # Get vendor tier (check vendor, product, then title/description)
     tier = get_vendor_tier(vendor)
     if tier == 4:  # Unknown vendor, try product
         tier = get_vendor_tier(product)
+    if tier == 4:  # Still unknown, try to extract from title
+        extracted = _extract_keyword_from_text(title + " " + description)
+        if extracted:
+            tier = get_vendor_tier(extracted)
 
     tier_weight = get_tier_weight(tier)
+
+    # CRITICAL FIX: High severity vulns (CVSS 9.0+) should not be buried
+    # by tier weighting. Apply minimum weight of 0.7 for critical vulns.
+    if cvss >= 9.0 and tier_weight < 0.7:
+        tier_weight = 0.7
 
     # Scale CVSS to 0-100 and apply tier weight
     base_score = cvss * 10
