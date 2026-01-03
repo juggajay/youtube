@@ -153,7 +153,20 @@ def _generate_mock_metadata(daily_brief: dict) -> dict:
         desc_parts.append(f"Today we cover {len(vulns)} vulnerabilities:")
         for v in vulns[:5]:
             severity = v.get("priority", "HIGH")
-            desc_parts.append(f"- [{severity}] {v.get('cve_id')}: {v.get('vendor')} {v.get('product')}")
+            cve_id = v.get("cve_id", "")
+            # Build description: prefer title, fall back to vendor+product
+            title = v.get("title", "")
+            vendor = v.get("vendor", "")
+            product = v.get("product", "")
+
+            if title:
+                # Truncate long titles
+                short_title = title[:60] + "..." if len(title) > 60 else title
+                desc_parts.append(f"- [{severity}] {cve_id}: {short_title}")
+            elif vendor or product:
+                desc_parts.append(f"- [{severity}] {cve_id}: {vendor} {product}".strip())
+            else:
+                desc_parts.append(f"- [{severity}] {cve_id}")
 
     desc_parts.extend([
         "",
