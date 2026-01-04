@@ -2,11 +2,21 @@
 Thumbnail Generator - Creates click-optimized YouTube thumbnails.
 
 Uses dynamic text overlays based on highest-impact content:
-- Compares vulnerability scores (vendor tier + CVSS) vs story impact scores
-- Priority 1: Highest scoring item (vuln or story) wins
-- Priority 2: Critical count fallback -> "[X] CRITICAL" (red)
-- Priority 3: High count fallback -> "[X] HIGH RISK" (yellow)
-- Priority 4: Quiet day -> "DAILY INTEL" (cyan)
+- Priority 1: CISA KEV vulnerabilities -> "{VENDOR} CRITICAL" (red)
+- Priority 2: Breach stories with dollar amounts -> "$X STOLEN" (red)
+- Priority 3: Critical CVEs (9.0+) with clear vendor -> "{VENDOR} CRITICAL" (red)
+- Priority 4: APT/nation-state stories -> "{APT} THREAT" (red)
+- Priority 5: High CVEs (7.0+) with clear vendor -> "{VENDOR} HIGH RISK" (yellow)
+- Priority 6: IoT/consumer device vulns -> "IOT ALERT" or "SMART HOME FLAW" (orange)
+- Priority 7: Attack type fallback -> "AUTH BYPASS", "CAMERA HACK" (orange)
+- Priority 8: Count fallback -> "[X] CRITICAL" or "[X] HIGH RISK"
+- Priority 9: Quiet day -> "DAILY INTEL" (cyan)
+
+Key design decisions:
+- Only extract Tier 1 vendors from TITLE (not description) to avoid false positives
+- Filter out third-party mentions like "via Google OAuth" or "Google IDs"
+- IoT devices get special treatment even if vendor is unknown
+- Attack types provide meaningful fallback headlines
 """
 
 import os
@@ -135,24 +145,220 @@ KEYWORD_MAP = {
     "REDIS": "REDIS",
     "KUBERNETES": "KUBERNETES",
     "DOCKER": "DOCKER",
-    # Attack types (fallback)
-    "REMOTE CODE EXECUTION": "RCE",
-    "SQL INJECTION": "SQL INJECTION",
-    "AUTHENTICATION BYPASS": "AUTH BYPASS",
-    "PRIVILEGE ESCALATION": "PRIV ESC",
 }
 
+# IoT/Smart device keywords - triggers special IoT headlines
+IOT_KEYWORDS = [
+    "SMART", "IOT", "CONNECTED DEVICE", "FEEDER", "THERMOSTAT",
+    "DOORBELL", "SMART LOCK", "SMART SPEAKER", "SMARTWATCH", "WEARABLE",
+    "SENSOR", "HOME AUTOMATION", "ZIGBEE", "Z-WAVE",
+    "PET CAM", "PET FEEDER", "BABY MONITOR", "SECURITY CAMERA", "IP CAMERA",
+    "SMART TV", "SMART PLUG", "SMART LIGHT", "SMART HOME",
+    "RING", "NEST", "ECOBEE", "WYZE", "BLINK", "ARLO",
+]
 
-def _extract_keyword_from_text(text: str) -> str:
-    """Extract a recognizable keyword from title/description."""
+# Attack types for fallback headlines (more specific than generic "VULNERABILITY")
+ATTACK_TYPE_HEADLINES = {
+    # Auth/Access issues
+    "AUTHENTICATION BYPASS": "AUTH BYPASS",
+    "AUTH BYPASS": "AUTH BYPASS",
+    "AUTHORIZATION BYPASS": "AUTH BYPASS",
+    "ACCOUNT TAKEOVER": "ACCOUNT TAKEOVER",
+    "SESSION HIJACK": "SESSION HIJACK",
+    "OAUTH": "AUTH BYPASS",  # OAuth issues are auth bypasses
+    # Camera/surveillance
+    "CAMERA ACCESS": "CAMERA HACK",
+    "CAMERA FEED": "CAMERA HACK",
+    "VIDEO FEED": "CAMERA HACK",
+    "SURVEILLANCE": "CAMERA HACK",
+    # Code execution
+    "REMOTE CODE EXECUTION": "RCE ALERT",
+    "CODE EXECUTION": "RCE ALERT",
+    "COMMAND INJECTION": "RCE ALERT",
+    "ARBITRARY CODE": "RCE ALERT",
+    # Injection
+    "SQL INJECTION": "SQL INJECTION",
+    "XSS": "XSS ALERT",
+    "CROSS-SITE SCRIPTING": "XSS ALERT",
+    # Privilege
+    "PRIVILEGE ESCALATION": "PRIV ESC",
+    "PRIVESC": "PRIV ESC",
+    "ROOT ACCESS": "PRIV ESC",
+    "ADMIN ACCESS": "PRIV ESC",
+    # Data
+    "DATA LEAK": "DATA LEAK",
+    "DATA EXPOSURE": "DATA EXPOSED",
+    "INFORMATION DISCLOSURE": "DATA EXPOSED",
+    "SENSITIVE DATA": "DATA EXPOSED",
+}
+
+# Third-party context patterns - if vendor appears in these contexts, it's NOT the subject
+THIRD_PARTY_PATTERNS = [
+    r'VIA\s+{vendor}',
+    r'USING\s+{vendor}',
+    r'WITH\s+{vendor}',
+    r'THROUGH\s+{vendor}',
+    r'{vendor}\s+IDS?\b',
+    r'{vendor}\s+OAUTH',
+    r'{vendor}\s+LOGIN',
+    r'{vendor}\s+ACCOUNT',
+    r'{vendor}\s+SIGN[- ]?IN',
+    r'{vendor}\s+AUTH(?:ENTICATION)?(?!\s+BYPASS)',  # "Google Auth" but not "Google Authentication Bypass"
+    r'{vendor}\s+SSO',
+    r'{vendor}\s+TOKEN',
+    r'{vendor}\s+API(?!\s+VULN)',  # "Google API" but not "Google API Vulnerability"
+]
+
+
+def _is_vendor_third_party(vendor: str, text: str) -> bool:
+    """
+    Check if a vendor appears in a third-party context (not the vulnerable product).
+
+    Examples of third-party context:
+    - "OAuth bypass via Google IDs" -> Google is third party
+    - "using Google authentication" -> Google is third party
+    - "Google Chrome vulnerability" -> Google is the subject (return False)
+    """
+    text_upper = text.upper()
+    vendor_upper = vendor.upper()
+
+    for pattern_template in THIRD_PARTY_PATTERNS:
+        pattern = pattern_template.format(vendor=re.escape(vendor_upper))
+        if re.search(pattern, text_upper):
+            return True
+
+    return False
+
+
+def _is_iot_device(title: str, description: str) -> bool:
+    """Check if vulnerability is about an IoT/smart/connected device."""
+    text_upper = (title + " " + description).upper()
+    for keyword in IOT_KEYWORDS:
+        if keyword in text_upper:
+            return True
+    return False
+
+
+def _get_iot_headline(title: str, description: str) -> str:
+    """
+    Get an appropriate headline for IoT device vulnerabilities.
+
+    Returns specific headlines based on device type, or generic IoT headline.
+    Priority: Camera > Baby Monitor > Home Security > Pet devices > Generic
+    """
+    text_upper = (title + " " + description).upper()
+
+    # Camera-related (highest priority - privacy concern)
+    if any(kw in text_upper for kw in ["CAMERA", "CAM", "VIDEO FEED", "SURVEILLANCE"]):
+        return "IOT CAMERA HACK"
+
+    # Baby monitors (high privacy concern)
+    if "BABY MONITOR" in text_upper:
+        return "BABY MONITOR FLAW"
+
+    # Home security
+    if any(kw in text_upper for kw in ["DOORBELL", "LOCK", "ALARM", "SECURITY SYSTEM"]):
+        return "SMART HOME FLAW"
+
+    # Pet devices
+    if any(kw in text_upper for kw in ["PET", "FEEDER"]):
+        return "IOT DEVICE FLAW"
+
+    # Generic IoT
+    return "IOT ALERT"
+
+
+def _get_best_iot_headline_from_vulns(vulns: list) -> str:
+    """
+    Check all vulnerabilities and return the best IoT headline.
+
+    Prioritizes more specific/alarming headlines like "IOT CAMERA HACK"
+    over generic ones like "IOT DEVICE FLAW".
+    """
+    # Headline priority (most alarming first)
+    headline_priority = [
+        "IOT CAMERA HACK",
+        "BABY MONITOR FLAW",
+        "SMART HOME FLAW",
+        "IOT DEVICE FLAW",
+        "IOT ALERT",
+    ]
+
+    best_headline = None
+    best_priority = len(headline_priority)  # Lower is better
+
+    for vuln in vulns:
+        title = vuln.get("title", "")
+        description = vuln.get("description", "")
+
+        if _is_iot_device(title, description):
+            headline = _get_iot_headline(title, description)
+            try:
+                priority = headline_priority.index(headline)
+                if priority < best_priority:
+                    best_priority = priority
+                    best_headline = headline
+            except ValueError:
+                # Unknown headline, use if we have nothing better
+                if not best_headline:
+                    best_headline = headline
+
+    return best_headline or "IOT ALERT"
+
+
+def _get_attack_type_headline(title: str, description: str) -> str:
+    """
+    Extract attack type for a meaningful fallback headline.
+
+    Better than "VULNERABILITY" - tells viewer what kind of attack.
+    """
+    text_upper = (title + " " + description).upper()
+
+    for pattern, headline in ATTACK_TYPE_HEADLINES.items():
+        if pattern in text_upper:
+            return headline
+
+    return ""
+
+
+def _extract_vendor_from_title(title: str) -> str:
+    """
+    Extract Tier 1 vendor from TITLE ONLY, with third-party filtering.
+
+    Only checks title (not description) to avoid false positives like
+    "Google IDs" in a Petlibro vulnerability description.
+    """
+    title_upper = title.upper()
+
+    for vendor in TIER_1_VENDORS:
+        if vendor in title_upper:
+            # Make sure it's not in a third-party context
+            if not _is_vendor_third_party(vendor, title):
+                return vendor
+
+    return ""
+
+
+def _extract_keyword_from_text(text: str, title_only: str = "") -> str:
+    """
+    Extract a recognizable keyword from text.
+
+    Args:
+        text: Full text (title + description) for keyword map search
+        title_only: Title text for Tier 1 vendor extraction (safer)
+
+    Returns:
+        Extracted keyword or empty string
+    """
     text_upper = text.upper()
 
-    # Check Tier-1 vendors first
-    for vendor in TIER_1_VENDORS:
-        if vendor in text_upper:
+    # For Tier 1 vendors, only check title to avoid false positives
+    if title_only:
+        vendor = _extract_vendor_from_title(title_only)
+        if vendor:
             return vendor
 
-    # Check keyword map
+    # Check keyword map (products, infrastructure)
     for keyword, display in KEYWORD_MAP.items():
         if keyword in text_upper:
             return display
@@ -170,6 +376,7 @@ def _calculate_vuln_score(vuln: dict) -> float:
     - CVSS score (0-10, scaled to 0-100)
     - Vendor tier weight multiplier
     - Critical severity boost (CVSS 9.0+ gets minimum 0.7 weight)
+    - IoT device boost (consumer relevance even if unknown vendor)
 
     Returns:
         Score 0-100
@@ -180,12 +387,13 @@ def _calculate_vuln_score(vuln: dict) -> float:
     title = vuln.get("title", "")
     description = vuln.get("description", "")
 
-    # Get vendor tier (check vendor, product, then title/description)
+    # Get vendor tier (check vendor, product, then TITLE ONLY for Tier 1)
     tier = get_vendor_tier(vendor)
     if tier == 4:  # Unknown vendor, try product
         tier = get_vendor_tier(product)
-    if tier == 4:  # Still unknown, try to extract from title
-        extracted = _extract_keyword_from_text(title + " " + description)
+    if tier == 4:  # Still unknown, try to extract from TITLE only (not description)
+        # This prevents "Google IDs" in description from matching "GOOGLE"
+        extracted = _extract_keyword_from_text(title + " " + description, title_only=title)
         if extracted:
             tier = get_vendor_tier(extracted)
 
@@ -195,6 +403,11 @@ def _calculate_vuln_score(vuln: dict) -> float:
     # by tier weighting. Apply minimum weight of 0.7 for critical vulns.
     if cvss >= 9.0 and tier_weight < 0.7:
         tier_weight = 0.7
+
+    # IoT device boost: consumer-relevant even if unknown vendor
+    # IoT vulns get minimum 0.6 weight (Tier 3 equivalent)
+    if tier == 4 and _is_iot_device(title, description):
+        tier_weight = max(tier_weight, 0.6)
 
     # Scale CVSS to 0-100 and apply tier weight
     base_score = cvss * 10
@@ -354,6 +567,14 @@ def _format_vuln_text(vuln: dict, force_red: bool = False) -> tuple:
     """
     Format vulnerability into thumbnail text with color.
 
+    Priority for headline text:
+    1. Structured vendor/product field
+    2. Tier 1 vendor in TITLE (not description)
+    3. IoT device headline
+    4. Attack type headline
+    5. Product keyword from keyword map
+    6. Generic "VULNERABILITY"
+
     Args:
         vuln: Vulnerability dict
         force_red: Force red color (e.g., CISA KEV in episode)
@@ -365,22 +586,52 @@ def _format_vuln_text(vuln: dict, force_red: bool = False) -> tuple:
     product = vuln.get("product", "").upper().strip()
     cvss = vuln.get("cvss_score", 0)
     is_kev = vuln.get("cisa_kev", False)
+    title = vuln.get("title", "")
+    description = vuln.get("description", "")
 
-    # Prefer vendor, fall back to product
+    # Priority 1: Prefer structured vendor/product field
     name = vendor if vendor else product
 
-    # Check for Tier-1 vendor match (use full name)
+    # Priority 2: Check for Tier-1 vendor match in structured fields
     for t1 in TIER_1_VENDORS:
         if t1 in vendor or t1 in product:
             name = t1
             break
 
-    # If still no name, try to extract from title/description
+    # Priority 3: Extract Tier 1 vendor from TITLE only (not description)
+    # This prevents "Google IDs" in description from matching "GOOGLE"
     if not name:
-        title = vuln.get("title", "")
-        description = vuln.get("description", "")
+        name = _extract_vendor_from_title(title)
+
+    # Priority 4: IoT device - use specific IoT headline
+    if not name and _is_iot_device(title, description):
+        iot_headline = _get_iot_headline(title, description)
+        # IoT headlines are complete (e.g., "IOT CAMERA HACK")
+        # Return directly with appropriate color
+        if is_kev or force_red or cvss >= 9.0:
+            return iot_headline, "#FF0000"
+        elif cvss >= 7.0:
+            return iot_headline, "#FFA500"  # Orange for IoT high risk
+        else:
+            return iot_headline, "#FFA500"
+
+    # Priority 5: Attack type headline (e.g., "AUTH BYPASS", "CAMERA HACK")
+    if not name:
+        attack_headline = _get_attack_type_headline(title, description)
+        if attack_headline:
+            # Attack type headlines are complete
+            if is_kev or force_red or cvss >= 9.0:
+                return attack_headline, "#FF0000"
+            elif cvss >= 7.0:
+                return attack_headline, "#FFA500"
+            else:
+                return attack_headline, "#FFA500"
+
+    # Priority 6: Product keyword from keyword map
+    if not name:
         name = _extract_keyword_from_text(title + " " + description)
 
+    # Fallback: generic
     if not name:
         name = "VULNERABILITY"
 
@@ -402,18 +653,26 @@ def determine_text(daily_brief: dict) -> tuple:
     """
     Returns (text, hex_color) based on highest-impact content.
 
-    Priority order:
-    1. Stories with dollar amounts (e.g., "$8.5M STOLEN") - always red
-    2. CISA KEV vulnerabilities - always red
-    3. Tier 1 vendor critical vulns - red
-    4. Other high-impact stories (APT, major breaches) - red
-    5. High severity vulns - yellow
-    6. Count fallbacks - red/yellow based on severity
-    7. "DAILY INTEL" - cyan (quiet day)
+    Priority order (designed to highlight what viewers care about):
+    1. CISA KEV vulnerabilities - must-patch urgency (red)
+    2. Breach stories with dollar amounts - "$8.5M STOLEN" (red)
+    3. Critical CVEs (9.0+) with clear vendor - "{VENDOR} CRITICAL" (red)
+    4. APT/nation-state stories - geopolitical significance (red)
+    5. IoT/consumer device vulns - "IOT CAMERA HACK" etc (orange)
+    6. Highest scoring vuln/story - based on CVSS × tier weight
+    7. Count fallback - "X CRITICAL" or "X HIGH RISK"
+    8. Quiet day - "DAILY INTEL" (cyan)
+
+    Key design decisions:
+    - Only extract Tier 1 vendors from TITLE (not description)
+    - Filter out third-party mentions like "via Google OAuth"
+    - IoT devices get best headline across all vulns ("IOT CAMERA HACK" beats "IOT DEVICE FLAW")
+    - Attack types provide meaningful fallback in _format_vuln_text
 
     Color rules:
     - Red (#FF0000): CISA KEV, CVSS 9.0+, major breaches, dollar amounts
-    - Yellow (#FFD700): CVSS 7.0-8.9, high risk
+    - Yellow (#FFD700): CVSS 7.0-8.9, high risk, known vendors
+    - Orange (#FFA500): IoT devices, attack types, notable but not critical
     - Cyan (#00FFFF): Quiet day fallback
     """
     vulns = daily_brief.get("vulnerabilities", [])
@@ -422,7 +681,12 @@ def determine_text(daily_brief: dict) -> tuple:
     # --- Check for CISA KEV (forces red for entire episode) ---
     has_kev = any(vuln.get("cisa_kev", False) for vuln in vulns)
 
-    # --- Priority 1: Stories with dollar amounts from BREACHES/THEFTS only ---
+    # --- Priority 1: CISA KEV vulnerability (highest urgency) ---
+    for vuln in vulns:
+        if vuln.get("cisa_kev", False):
+            return _format_vuln_text(vuln, force_red=True)
+
+    # --- Priority 2: Breach stories with dollar amounts ---
     # "$8.5M STOLEN" is click-worthy, but "$20 savings" is not
     best_dollar_story = None
     best_dollar_amount = ""
@@ -447,12 +711,56 @@ def determine_text(daily_brief: dict) -> tuple:
         text = _format_story_text(best_dollar_story)
         return text, "#FF0000"  # Breach dollar amounts always red
 
-    # --- Priority 2: CISA KEV vulnerability ---
+    # --- Priority 3: Critical CVE (9.0+) with clear vendor ---
     for vuln in vulns:
-        if vuln.get("cisa_kev", False):
-            return _format_vuln_text(vuln, force_red=True)
+        cvss = vuln.get("cvss_score", 0)
+        if cvss >= 9.0:
+            vendor = vuln.get("vendor", "").strip()
+            product = vuln.get("product", "").strip()
+            title = vuln.get("title", "")
 
-    # --- Priority 3: Score remaining vulns and stories ---
+            # Check if we have a clear vendor (not just from description context)
+            has_clear_vendor = bool(vendor or product or _extract_vendor_from_title(title))
+            if has_clear_vendor:
+                return _format_vuln_text(vuln, force_red=True)
+
+    # --- Priority 4: APT/nation-state stories ---
+    for story_dict in stories:
+        if not isinstance(story_dict, dict):
+            continue
+        title = story_dict.get("title", "").upper()
+        story_type = story_dict.get("story_type", "")
+
+        # Check for APT indicators
+        apt_indicators = [
+            "APT", "NATION-STATE", "CHINA-LINKED", "RUSSIA-LINKED",
+            "IRAN-LINKED", "NORTH KOREA", "LAZARUS", "FANCY BEAR",
+            "VOLT TYPHOON", "SANDWORM", "COZY BEAR", "STATE-SPONSORED"
+        ]
+        if story_type == "apt" or any(ind in title for ind in apt_indicators):
+            text = _format_story_text(story_dict)
+            return text, "#FF0000"
+
+    # --- Priority 5: IoT device vulnerabilities (check all vulns) ---
+    # IoT vulns are consumer-relevant even if vendor is unknown
+    any_iot = any(_is_iot_device(v.get("title", ""), v.get("description", "")) for v in vulns)
+    if any_iot:
+        # Get best IoT headline across all vulns
+        iot_headline = _get_best_iot_headline_from_vulns(vulns)
+        # Find the highest CVSS among IoT vulns to determine color
+        max_iot_cvss = max(
+            (v.get("cvss_score", 0) for v in vulns
+             if _is_iot_device(v.get("title", ""), v.get("description", ""))),
+            default=0
+        )
+        if max_iot_cvss >= 9.0:
+            return iot_headline, "#FF0000"
+        elif max_iot_cvss >= 7.0:
+            return iot_headline, "#FFA500"
+        else:
+            return iot_headline, "#FFA500"
+
+    # --- Priority 6: Score remaining vulns and stories ---
     best_vuln_score = 0
     best_vuln = None
     best_story_score = 0
@@ -476,13 +784,12 @@ def determine_text(daily_brief: dict) -> tuple:
     # --- Compare and pick winner ---
     if best_vuln_score > 0 or best_story_score > 0:
         # Stories need to beat vulns by a margin to win (vulns are core content)
-        # But APT/breach stories should still beat generic vulns
-        if best_story_score > best_vuln_score and best_story:
-            # Story wins
+        if best_story_score > best_vuln_score * 1.2 and best_story:
+            # Story wins (needs 20% higher score)
             text = _format_story_text(best_story)
-            return text, "#FF0000"  # Stories are always red (high urgency)
+            return text, "#FF0000"
         elif best_vuln:
-            # Vulnerability wins
+            # Vulnerability wins - _format_vuln_text handles attack types
             return _format_vuln_text(best_vuln, force_red=has_kev)
 
     # --- Fallback: counts ---
